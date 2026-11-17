@@ -4,14 +4,19 @@
 
 ## Chạy bằng Docker Compose
 
-Yêu cầu Docker Desktop. Nếu chưa có file `.env` ở thư mục gốc, tạo một lần trong PowerShell:
+Yêu cầu Docker Desktop và một project Supabase (database PostgreSQL). Nếu chưa có file `.env` ở thư mục gốc, tạo một lần trong PowerShell:
 
 ```powershell
-node -e "const fs=require('fs'), c=require('crypto'); fs.writeFileSync('.env', 'CREDENTIAL_ENCRYPTION_KEY='+c.randomBytes(32).toString('base64url')+'=\nPOSTGRES_PASSWORD='+c.randomBytes(24).toString('hex')+'\n', {flag:'wx'});"
+node -e "const fs=require('fs'), c=require('crypto'); fs.writeFileSync('.env', 'CREDENTIAL_ENCRYPTION_KEY='+c.randomBytes(32).toString('base64url')+'=\nDATABASE_URL=\n', {flag:'wx'});"
+```
+
+Điền `DATABASE_URL` trong `.env`: trên Supabase mở **Connect** → **Session pooler** (hỗ trợ IPv4), copy chuỗi kết nối, thay `[YOUR-PASSWORD]` bằng mật khẩu database và thêm `?sslmode=require&uselibpqcompat=true` vào cuối (xem `.env.example`). Không dùng Direct connection (chỉ IPv6) hoặc Transaction pooler (cổng 6543). Sau đó chạy:
+
+```powershell
 docker compose up --build -d
 ```
 
-Giữ lại `.env`: khóa mã hóa và mật khẩu database cần thiết để sử dụng lại dữ liệu. Không chia sẻ hoặc commit file này. Mở http://localhost:3000. Backend dùng Next.js Route Handlers để gọi Kaggle qua HTTP. Dừng bằng `docker compose down`; dữ liệu PostgreSQL vẫn được giữ trong volume. Không thêm `-v` nếu muốn giữ dữ liệu.
+Khi khởi động, container chạy `scripts/migrate-auth.mjs` để tạo các bảng đăng nhập và `compute_accounts`, đồng thời bật Row Level Security để Data API công khai của Supabase không đọc được. Nếu cổng 3000 bận, đặt `WEB_PORT` trong `.env` và đặt `BETTER_AUTH_URL` cùng cổng đó (ví dụ `http://localhost:3001`), nếu không các thao tác ghi sẽ bị chặn với lỗi "Nguồn yêu cầu không hợp lệ". Giữ lại `.env`: thiếu khóa mã hóa thì không giải mã được token đã lưu. Không chia sẻ hoặc commit file này. Mở http://localhost:3000. Backend dùng Next.js Route Handlers để gọi Kaggle qua HTTP. Dừng bằng `docker compose down`; dữ liệu nằm trên Supabase.
 
 ## Đăng nhập
 
