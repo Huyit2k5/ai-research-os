@@ -14,6 +14,8 @@ try {
   await lock.query("CREATE TABLE IF NOT EXISTS compute_accounts (id SERIAL PRIMARY KEY, label VARCHAR(100) NOT NULL, username VARCHAR(100) NOT NULL, credential TEXT NOT NULL, verified BOOLEAN NOT NULL DEFAULT FALSE, last_verified_at TIMESTAMPTZ)");
   await lock.query("ALTER TABLE compute_accounts ADD COLUMN IF NOT EXISTS owner_id TEXT REFERENCES \"user\"(id)");
   await lock.query("CREATE INDEX IF NOT EXISTS compute_accounts_owner_id_idx ON compute_accounts(owner_id)");
+  // Supabase exposes public tables through its Data API; RLS without policies blocks it, while this owning role bypasses RLS.
+  for (const table of ["user", "session", "account", "verification", "compute_accounts"]) await lock.query(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
 } finally {
   await lock.query("SELECT pg_advisory_unlock(82645122)");
   lock.release();

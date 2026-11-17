@@ -15,7 +15,7 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 
 ## 3. Kết nối tài khoản thật
 - [x] API thêm, liệt kê, kiểm tra, thay credential và xóa kết nối; mã hóa credential server-side, không trả về client.
-- [x] Lưu dữ liệu bền vững bằng PostgreSQL qua DATABASE_URL.
+- [x] Lưu dữ liệu bền vững, PostgreSQL trên Supabase qua DATABASE_URL.
 - [ ] Kiểm thử với token Kaggle thật; xác minh phân tách nhiều tài khoản.
 - [x] Đăng ký, đăng nhập và cách ly các kết nối Kaggle theo từng người dùng.
 - [ ] Trước khi triển khai cho nhiều người: xác minh email, khôi phục mật khẩu, phân quyền workspace, secret manager và migrations có phiên bản.

@@ -6,8 +6,9 @@ export class AppError extends Error { constructor(public status: number, message
 const globalPool = globalThis as typeof globalThis & { researchPool?: Pool };
 export const db = globalPool.researchPool ??= new Pool({ connectionString: process.env.DATABASE_URL });
 let initialized: Promise<unknown> | undefined;
+// RLS with no policies blocks Supabase's public Data API (anon/authenticated); the owning role used here bypasses it.
 export function initialize() {
-  initialized ??= db.query(`CREATE TABLE IF NOT EXISTS compute_accounts (id SERIAL PRIMARY KEY, label VARCHAR(100) NOT NULL, username VARCHAR(100) NOT NULL, credential TEXT NOT NULL, verified BOOLEAN NOT NULL DEFAULT FALSE, last_verified_at TIMESTAMPTZ)` ).catch(err => { initialized = undefined; throw err; });
+  initialized ??= db.query(`CREATE TABLE IF NOT EXISTS compute_accounts (id SERIAL PRIMARY KEY, label VARCHAR(100) NOT NULL, username VARCHAR(100) NOT NULL, credential TEXT NOT NULL, verified BOOLEAN NOT NULL DEFAULT FALSE, last_verified_at TIMESTAMPTZ); ALTER TABLE compute_accounts ENABLE ROW LEVEL SECURITY` ).catch(err => { initialized = undefined; throw err; });
   return initialized;
 }
 function keyBytes() {
