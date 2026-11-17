@@ -37,10 +37,10 @@ export function decryptToken(encoded: string) {
     return Buffer.concat([decipher.update(payload.subarray(25)), decipher.final()]).toString("utf8");
   } catch { throw new AppError(503, "Không thể giải mã token. Kiểm tra khóa mã hóa."); }
 }
-export async function accountById(id: string, ownerId: string) {
+export async function accountById(id: string, workspaceId: string) {
   if (!/^[1-9][0-9]{0,9}$/.test(id)) throw new AppError(404, "Không tìm thấy kết nối.");
   await initialize();
-  const result = await db.query("SELECT * FROM compute_accounts WHERE id=$1 AND owner_id=$2", [id, ownerId]);
+  const result = await db.query("SELECT * FROM compute_accounts WHERE id=$1 AND workspace_id=$2", [id, workspaceId]);
   if (!result.rows.length) throw new AppError(404, "Không tìm thấy kết nối.");
   return result.rows[0];
 }

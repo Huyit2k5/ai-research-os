@@ -1,5 +1,6 @@
 import { accountById, AppError, db, decryptToken, encryptToken, initialize, kaggleCall, normalizeQuota } from "../../../lib/server";
 import { auth } from "../../../lib/auth";
+import { randomUUID } from "node:crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,21 +68,29 @@ async function handler(req: Request, ctx: Context) {
     const trustedOrigin = new URL(process.env.BETTER_AUTH_URL || "http://localhost:3000").origin;
     if (method !== "GET" && origin && origin !== trustedOrigin) throw new AppError(403, "Nguồn yêu cầu không hợp lệ.");
     if (path[0] === "health" && method === "GET") return json({ status: "ok" });
-    if (path[0] !== "accounts") throw new AppError(404, "Không tìm thấy API.");
+    if (path[0] !== "accounts" && path[0] !== "workspace") throw new AppError(404, "Không tìm thấy API.");
     const session = await auth.api.getSession({ headers: req.headers });
     if (!session) throw new AppError(401, "Vui lòng đăng nhập để tiếp tục.");
-    const ownerId = session.user.id;
+    const ownerId = session.user.id, activeId = session.session.activeOrganizationId ?? "";
     await initialize();
+    // Use the active workspace while the user is still a member; otherwise fall back to their oldest one, or create a personal one.
+    let workspace: { id: string; name: string; role: string } | undefined = (await db.query('SELECT m."organizationId" AS id, o.name, m.role FROM member m JOIN organization o ON o.id=m."organizationId" WHERE m."userId"=$1 ORDER BY (m."organizationId"=$2) DESC, m."createdAt" LIMIT 1', [ownerId, activeId])).rows[0];
+    // shortcut: parallel first requests from a user with no workspace can each create one; harmless (they can leave the extra), add a per-user lock if it shows up.
+    if (!workspace) workspace = { id: (await auth.api.createOrganization({ body: { name: "Cá nhân", slug: `ca-nhan-${randomUUID()}` }, headers: req.headers })).id, name: "Cá nhân", role: "owner" };
+    else if (workspace.id !== activeId) await db.query('UPDATE session SET "activeOrganizationId"=$1 WHERE id=$2', [workspace.id, session.session.id]);
+    if (path[0] === "workspace") { if (path.length === 1 && method === "GET") return json(workspace); throw new AppError(404, "Không tìm thấy API."); }
     // Only the first registered user can claim connections created before login was added.
-    await db.query('UPDATE compute_accounts SET owner_id=$1 WHERE owner_id IS NULL AND $1=(SELECT id FROM "user" ORDER BY "createdAt", id LIMIT 1)', [ownerId]);
-    if (path.length === 1 && method === "GET") return json((await db.query(`SELECT ${fields} FROM compute_accounts WHERE owner_id=$1 ORDER BY id DESC`, [ownerId])).rows);
+    await db.query('UPDATE compute_accounts SET owner_id=$1, workspace_id=$2 WHERE owner_id IS NULL AND $1=(SELECT id FROM "user" ORDER BY "createdAt", id LIMIT 1)', [ownerId, workspace.id]);
+    if (path.length === 1 && method === "GET") return json((await db.query(`SELECT a.id, a.label, a.username, a.verified, a.last_verified_at, u.name AS creator, a.owner_id=$2 AS mine, (a.owner_id=$2 OR $3) AS can_delete FROM compute_accounts a LEFT JOIN "user" u ON u.id=a.owner_id WHERE a.workspace_id=$1 ORDER BY a.id DESC`, [workspace.id, ownerId, ["owner", "admin"].includes(workspace.role)])).rows);
     if (path.length === 1 && method === "POST") {
       const data = await payload(req), label = required(data.label, "Tên kết nối", 100), username = required(data.username, "Username", 100), token = required(data.token, "Token", 10000);
-      const result = await db.query(`INSERT INTO compute_accounts (label,username,credential,verified,owner_id) VALUES ($1,$2,$3,false,$4) RETURNING ${fields}`, [label, username, encryptToken(token), ownerId]);
+      const result = await db.query(`INSERT INTO compute_accounts (label,username,credential,verified,owner_id,workspace_id) VALUES ($1,$2,$3,false,$4,$5) RETURNING ${fields}`, [label, username, encryptToken(token), ownerId, workspace.id]);
       return json(result.rows[0], 201);
     }
-    const account = await accountById(path[1], ownerId);
-    if (path.length === 2 && method === "DELETE") { await db.query("DELETE FROM compute_accounts WHERE id=$1", [account.id]); return new Response(null, { status: 204 }); }
+    const account = await accountById(path[1], workspace.id), mine = account.owner_id === ownerId;
+    if (path.length === 2 && method === "DELETE") { if (!mine && !["owner", "admin"].includes(workspace.role)) throw new AppError(403, "Chỉ người tạo kết nối hoặc quản trị workspace mới được xóa."); await db.query("DELETE FROM compute_accounts WHERE id=$1", [account.id]); return new Response(null, { status: 204 }); }
+    // Everything below uses or replaces the stored Kaggle token, which only its creator may do.
+    if (!mine) throw new AppError(403, "Chỉ người tạo kết nối mới được dùng token này.");
     if (path[2] === "credential" && method === "PATCH") { const token = required((await payload(req)).token, "Token", 10000); return json((await db.query(`UPDATE compute_accounts SET credential=$1,verified=false,last_verified_at=NULL WHERE id=$2 RETURNING ${fields}`, [encryptToken(token), account.id])).rows[0]); }
     if (path[2] === "verify" && method === "POST") {
       let success = false; try { await kaggleCall(decryptToken(account.credential), "GetAcceleratorQuotaStatistics", {}); success = true; } finally { await db.query("UPDATE compute_accounts SET verified=$1,last_verified_at=NOW() WHERE id=$2", [success, account.id]); }

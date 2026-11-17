@@ -18,7 +18,8 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 - [x] Lưu dữ liệu bền vững, PostgreSQL trên Supabase qua DATABASE_URL.
 - [ ] Kiểm thử với token Kaggle thật; xác minh phân tách nhiều tài khoản.
 - [x] Đăng ký, đăng nhập và cách ly các kết nối Kaggle theo từng người dùng.
-- [ ] Trước khi triển khai cho nhiều người: xác minh email, khôi phục mật khẩu, phân quyền workspace, secret manager và migrations có phiên bản.
+- [x] Workspace nhóm: mời thành viên bằng link theo email, cùng thấy danh sách kết nối; chỉ người tạo kết nối mới dùng được token.
+- [ ] Trước khi triển khai cho nhiều người: xác minh email, khôi phục mật khẩu, secret manager và migrations có phiên bản.
 
 ## 4. Đồng bộ và hoàn thiện
 - [x] Đồng bộ thủ công quota và danh sách notebook trong phiên trình duyệt.
