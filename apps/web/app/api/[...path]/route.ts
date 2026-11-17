@@ -1,4 +1,5 @@
 import { accountById, AppError, db, decryptToken, encryptToken, initialize, kaggleCall, normalizeQuota } from "../../../lib/server";
+import { auth } from "../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,17 +64,23 @@ async function handler(req: Request, ctx: Context) {
   try {
     const path = (await ctx.params).path, method = req.method;
     const origin = req.headers.get("origin");
-    if (method !== "GET" && origin && origin !== new URL(req.url).origin) throw new AppError(403, "Nguồn yêu cầu không hợp lệ.");
+    const trustedOrigin = new URL(process.env.BETTER_AUTH_URL || "http://localhost:3000").origin;
+    if (method !== "GET" && origin && origin !== trustedOrigin) throw new AppError(403, "Nguồn yêu cầu không hợp lệ.");
     if (path[0] === "health" && method === "GET") return json({ status: "ok" });
     if (path[0] !== "accounts") throw new AppError(404, "Không tìm thấy API.");
+    const session = await auth.api.getSession({ headers: req.headers });
+    if (!session) throw new AppError(401, "Vui lòng đăng nhập để tiếp tục.");
+    const ownerId = session.user.id;
     await initialize();
-    if (path.length === 1 && method === "GET") return json((await db.query(`SELECT ${fields} FROM compute_accounts ORDER BY id DESC`)).rows);
+    // Only the first registered user can claim connections created before login was added.
+    await db.query('UPDATE compute_accounts SET owner_id=$1 WHERE owner_id IS NULL AND $1=(SELECT id FROM "user" ORDER BY "createdAt", id LIMIT 1)', [ownerId]);
+    if (path.length === 1 && method === "GET") return json((await db.query(`SELECT ${fields} FROM compute_accounts WHERE owner_id=$1 ORDER BY id DESC`, [ownerId])).rows);
     if (path.length === 1 && method === "POST") {
       const data = await payload(req), label = required(data.label, "Tên kết nối", 100), username = required(data.username, "Username", 100), token = required(data.token, "Token", 10000);
-      const result = await db.query(`INSERT INTO compute_accounts (label,username,credential,verified) VALUES ($1,$2,$3,false) RETURNING ${fields}`, [label, username, encryptToken(token)]);
+      const result = await db.query(`INSERT INTO compute_accounts (label,username,credential,verified,owner_id) VALUES ($1,$2,$3,false,$4) RETURNING ${fields}`, [label, username, encryptToken(token), ownerId]);
       return json(result.rows[0], 201);
     }
-    const account = await accountById(path[1]);
+    const account = await accountById(path[1], ownerId);
     if (path.length === 2 && method === "DELETE") { await db.query("DELETE FROM compute_accounts WHERE id=$1", [account.id]); return new Response(null, { status: 204 }); }
     if (path[2] === "credential" && method === "PATCH") { const token = required((await payload(req)).token, "Token", 10000); return json((await db.query(`UPDATE compute_accounts SET credential=$1,verified=false,last_verified_at=NULL WHERE id=$2 RETURNING ${fields}`, [encryptToken(token), account.id])).rows[0]); }
     if (path[2] === "verify" && method === "POST") {

@@ -10,6 +10,7 @@ ENV NODE_ENV=production
 COPY --from=build --chown=node:node /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/.next ./.next
+COPY --from=build --chown=node:node /app/scripts ./scripts
 USER node
 EXPOSE 3000
-CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0"]
+CMD ["sh", "-c", "node scripts/migrate-auth.mjs && exec npm run start -- --hostname 0.0.0.0"]

@@ -11,13 +11,14 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 
 ## 2. Giao diện sáng
 - [x] Dashboard responsive, trạng thái trống và lỗi, biểu mẫu kết nối, kiểm tra và ngắt kết nối.
-- [ ] Bổ sung màn hình notebook và các trạng thái đồng bộ sau khi xác minh API.
+- [x] Bổ sung màn hình notebook và các trạng thái đồng bộ.
 
 ## 3. Kết nối tài khoản thật
 - [x] API thêm, liệt kê, kiểm tra, thay credential và xóa kết nối; mã hóa credential server-side, không trả về client.
-- [x] Lưu dữ liệu bền vững, cấu hình SQLite cho phát triển cục bộ và PostgreSQL qua DATABASE_URL.
+- [x] Lưu dữ liệu bền vững bằng PostgreSQL qua DATABASE_URL.
 - [ ] Kiểm thử với token Kaggle thật; xác minh phân tách nhiều tài khoản.
-- [ ] Trước khi triển khai cho nhiều người: đăng nhập, phân quyền workspace, secret manager và migrations.
+- [x] Đăng ký, đăng nhập và cách ly các kết nối Kaggle theo từng người dùng.
+- [ ] Trước khi triển khai cho nhiều người: xác minh email, khôi phục mật khẩu, phân quyền workspace, secret manager và migrations có phiên bản.
 
 ## 4. Đồng bộ và hoàn thiện
 - [x] Đồng bộ thủ công quota và danh sách notebook trong phiên trình duyệt.
