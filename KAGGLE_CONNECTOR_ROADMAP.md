@@ -1,11 +1,13 @@
 ﻿# Lộ trình triển khai Kaggle Account Manager
 
-Mục tiêu: xây dựng ứng dụng cá nhân quản lý các kết nối Kaggle được ủy quyền; mở rộng dần thành AI Research OS. Giao diện sáng, Next.js; backend FastAPI, lưu credential mã hóa. Các số liệu trên giao diện chỉ hiển thị khi đồng bộ được từ Kaggle.
+Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle của chính người dùng; mở rộng dần thành AI Research OS. Giao diện và API dùng Next.js, lưu credential mã hóa. Các số liệu trên giao diện chỉ hiển thị khi đồng bộ được từ Kaggle.
 
 ## 1. Nền tảng và kiểm chứng
 - [x] Tạo cấu trúc dự án, cấu hình môi trường, tài liệu chạy và API.
 - [x] Tách adapter Kaggle, xác thực bằng API token qua tiến trình CLI riêng cho từng tài khoản.
-- [ ] Kiểm chứng quota, notebook và logs với tài khoản thật và phiên bản CLI đã cài. Các tính năng chưa xác minh không được trình bày là đã hoạt động.
+- [x] Kiểm chứng quota và danh sách notebook với tài khoản thật và phiên bản CLI đã cài.
+- [x] Kiểm chứng lấy logs với notebook thật.
+- [ ] Kiểm chứng trạng thái chạy với notebook thật.
 
 ## 2. Giao diện sáng
 - [x] Dashboard responsive, trạng thái trống và lỗi, biểu mẫu kết nối, kiểm tra và ngắt kết nối.
@@ -18,7 +20,10 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý các kết nối Kagg
 - [ ] Trước khi triển khai cho nhiều người: đăng nhập, phân quyền workspace, secret manager và migrations.
 
 ## 4. Đồng bộ và hoàn thiện
-- [ ] Tích hợp quota, danh sách notebook, trạng thái và logs theo khả năng CLI đã xác minh.
+- [x] Đồng bộ thủ công quota và danh sách notebook trong phiên trình duyệt.
+- [x] Xem và làm mới logs notebook thủ công.
+- [x] Triển khai luồng logs trực tiếp qua Kaggle CLI; cần kiểm chứng với notebook đang chạy.
+- [ ] Tích hợp trạng thái chạy và lưu dữ liệu đồng bộ bền vững.
 - [ ] Đồng bộ định kỳ, retry, giới hạn request và thông báo lỗi.
 - [ ] Kiểm thử end-to-end với Kaggle; sau đó thêm MLflow, biểu đồ và thông báo.
 
