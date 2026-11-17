@@ -62,7 +62,8 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
     setLive(true); setLiveText(""); setLiveTrimmed(false); liveSize.current = 0; setError(""); setLiveStatus("Đang kết nối Kaggle...");
     try {
       const response = await fetch(`${API}/api/accounts/${selection.account.id}/notebook-logs-stream?ref=${encodeURIComponent(selection.ref)}`, { signal: controller.signal, cache: "no-store" });
-      if (!response.ok || !response.body) throw new Error("Không thể mở luồng logs. Hãy thử lại.");
+      if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(typeof body.detail === "string" ? body.detail : "Không thể mở luồng logs. Hãy thử lại."); }
+      if (!response.body) throw new Error("Không thể mở luồng logs. Hãy thử lại.");
       const reader = response.body.getReader(), decoder = new TextDecoder(); let pending = "";
       while (true) {
         const { value, done } = await reader.read(); if (done) break;
@@ -78,7 +79,7 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
           if (kind === "error") { setError(payload.message || "Không thể theo dõi logs."); setLiveStatus(""); }
         }
       }
-    } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Không thể theo dõi logs."); }
+    } catch (err) { if (!controller.signal.aborted) { setLiveStatus(""); setError(err instanceof Error ? err.message : "Không thể theo dõi logs."); } }
     finally { if (liveController.current === controller) { liveController.current = null; setLive(false); } }
   }
   function stop() { liveController.current?.abort(); liveController.current = null; setLive(false); setLiveStatus("Đã dừng theo dõi."); }

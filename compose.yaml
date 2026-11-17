@@ -18,7 +18,6 @@ services:
     environment:
       DATABASE_URL: postgresql://research_os:${POSTGRES_PASSWORD}@db:5432/research_os
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set CREDENTIAL_ENCRYPTION_KEY in .env}
-      KAGGLE_PYTHON: /opt/kaggle/bin/python
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

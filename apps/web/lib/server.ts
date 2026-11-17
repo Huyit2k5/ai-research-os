@@ -1,9 +1,5 @@
 import "server-only";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
 import { Pool } from "pg";
 
 export class AppError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -47,27 +43,22 @@ export async function accountById(id: string) {
   if (!result.rows.length) throw new AppError(404, "Không tìm thấy kết nối.");
   return result.rows[0];
 }
-export async function startKaggle(token: string, args: string[]) {
-  const dir = await mkdtemp(join(tmpdir(), "research-os-kaggle-"));
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("KAGGLE_"))) as NodeJS.ProcessEnv;
-  Object.assign(env, { KAGGLE_API_TOKEN: token, KAGGLE_CONFIG_DIR: dir, HOME: dir, USERPROFILE: dir, PYTHONUNBUFFERED: "1" });
-  const child = spawn(process.env.KAGGLE_PYTHON || "python3", ["-u", "-m", "kaggle", ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
-  return { child, cleanup: () => rm(dir, { recursive: true, force: true }).catch(() => {}) };
+// These methods mirror the official Kaggle SDK; credentials never enter URLs or logs.
+export async function kaggleCall(token: string, method: string, body: object): Promise<Record<string, unknown>> {
+  try {
+    const response = await fetch(`https://api.kaggle.com/v1/kernels.KernelsApiService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store", signal: AbortSignal.timeout(45000) });
+    if (!response.ok) throw new Error();
+    const data: unknown = await response.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error();
+    return data as Record<string, unknown>;
+  } catch { throw new AppError(502, "Kaggle không trả dữ liệu. Kiểm tra token, quyền truy cập và kết nối mạng."); }
 }
-export async function runKaggle(token: string, args: string[], maxBytes = 1024 * 1024) {
-  const { child, cleanup } = await startKaggle(token, args);
-  return new Promise<{ text: string; truncated: boolean }>((resolve, reject) => {
-    let chunks: Buffer[] = [], size = 0, settled = false;
-    const timer = setTimeout(() => { child.kill(); finish(new AppError(502, "Yêu cầu Kaggle quá thời gian.")); }, 45000);
-    function finish(error?: Error) { if (settled) return; settled = true; clearTimeout(timer); void cleanup(); if (error) reject(error); else resolve({ text: Buffer.concat(chunks).subarray(-maxBytes).toString("utf8").trim(), truncated: size > maxBytes }); }
-    child.stdout.on("data", (chunk: Buffer) => { size += chunk.length; chunks.push(chunk); while (chunks.length > 1 && chunks.reduce((n, b) => n + b.length, 0) - chunks[0].length >= maxBytes) chunks.shift(); if (chunks.length === 1 && chunks[0].length > maxBytes) chunks[0] = chunks[0].subarray(-maxBytes); });
-    child.stderr.resume(); child.on("error", () => finish(new AppError(502, "Không thể chạy Kaggle CLI.")));
-    child.on("close", code => finish(code === 0 ? undefined : new AppError(502, "Kaggle không trả dữ liệu. Kiểm tra token, quyền truy cập và kết nối mạng.")));
+export function normalizeQuota(data: Record<string, unknown>) {
+  return ([["GPU", data.gpuQuota], ["TPU", data.tpuQuota]] as const).flatMap(([resource, raw]) => {
+    if (!raw || typeof raw !== "object") return [];
+    const quota = raw as Record<string, unknown>;
+    const hours = (v: unknown) => { if (typeof v !== "string" || !/^\d+(?:\.\d+)?s$/.test(v)) throw new AppError(502, "Kaggle trả quota không đúng định dạng."); return Number(v.slice(0, -1)) / 3600; };
+    const used = hours(quota.timeUsed ?? "0s"), total = hours(quota.totalTimeAllowed);
+    return [{ resource, used: `${used.toFixed(2)}h`, remaining: `${Math.max(0, total - used).toFixed(2)}h`, total: `${total.toFixed(2)}h`, refreshAt: data.quotaRefreshTime ?? "" }];
   });
-}
-export function parseResults(text: string) {
-  if (text === "Not found" || text === "No quota information available") return { data: [], truncated: false };
-  const truncated = text.startsWith("Next Page Token = ");
-  try { const data: unknown = JSON.parse(truncated ? text.slice(text.indexOf("\n") + 1) : text); if (!Array.isArray(data)) throw new Error(); return { data, truncated }; }
-  catch { throw new AppError(502, "Kaggle trả về dữ liệu không đúng định dạng."); }
 }

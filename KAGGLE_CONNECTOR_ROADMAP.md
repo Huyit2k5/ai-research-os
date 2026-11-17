@@ -4,8 +4,8 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 
 ## 1. Nền tảng và kiểm chứng
 - [x] Tạo cấu trúc dự án, cấu hình môi trường, tài liệu chạy và API.
-- [x] Tách adapter Kaggle, xác thực bằng API token qua tiến trình CLI riêng cho từng tài khoản.
-- [x] Kiểm chứng quota và danh sách notebook với tài khoản thật và phiên bản CLI đã cài.
+- [x] Xác thực từng tài khoản bằng API token và gọi Kaggle qua HTTP.
+- [x] Kiểm chứng quota và danh sách notebook với tài khoản thật.
 - [x] Kiểm chứng lấy logs với notebook thật.
 - [ ] Kiểm chứng trạng thái chạy với notebook thật.
 
@@ -22,7 +22,7 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 ## 4. Đồng bộ và hoàn thiện
 - [x] Đồng bộ thủ công quota và danh sách notebook trong phiên trình duyệt.
 - [x] Xem và làm mới logs notebook thủ công.
-- [x] Triển khai luồng logs trực tiếp qua Kaggle CLI; cần kiểm chứng với notebook đang chạy.
+- [x] Triển khai luồng logs trực tiếp qua API Kaggle; cần kiểm chứng với notebook đang chạy.
 - [ ] Tích hợp trạng thái chạy và lưu dữ liệu đồng bộ bền vững.
 - [ ] Đồng bộ định kỳ, retry, giới hạn request và thông báo lỗi.
 - [ ] Kiểm thử end-to-end với Kaggle; sau đó thêm MLflow, biểu đồ và thông báo.

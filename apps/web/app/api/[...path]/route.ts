@@ -1,5 +1,4 @@
-import { StringDecoder } from "node:string_decoder";
-import { accountById, AppError, db, decryptToken, encryptToken, initialize, parseResults, runKaggle, startKaggle } from "../../../lib/server";
+import { accountById, AppError, db, decryptToken, encryptToken, initialize, kaggleCall, normalizeQuota } from "../../../lib/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,23 +12,49 @@ async function payload(req: Request) { try { return await req.json(); } catch { 
 function required(value: unknown, name: string, max: number) { if (typeof value !== "string" || !value.trim() || value.trim().length > max) throw new AppError(422, `${name} không hợp lệ.`); return value.trim(); }
 
 async function streamLogs(req: Request, token: string, ref: string) {
-  const { child, cleanup } = await startKaggle(token, ["kernels", "logs", ref, "--follow"]);
-  const encoder = new TextEncoder(), decoder = new StringDecoder("utf8");
-  let ended = false, timer: ReturnType<typeof setTimeout>;
+  const [owner, slug, version] = ref.split("/");
+  const url = new URL(`https://api.kaggle.com/v1/kernels/logs/stream/${owner}/${slug}`);
+  if (version) url.searchParams.set("versionLabel", version);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30 * 60 * 1000);
+  req.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  if (req.signal.aborted) controller.abort();
+  let upstream: Response;
+  try { upstream = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream, */*" }, signal: controller.signal, cache: "no-store" }); }
+  catch { clearTimeout(timeout); throw new AppError(502, "Không thể kết nối luồng logs Kaggle."); }
+  if (!upstream.ok || !upstream.body) { clearTimeout(timeout); throw new AppError(502, "Kaggle không mở được logs trực tiếp cho notebook này. Hãy thử nút Làm mới."); }
+  const isSSE = (upstream.headers.get("content-type") || "").includes("text/event-stream"), reader = upstream.body.getReader(), encoder = new TextEncoder(), decoder = new TextDecoder();
   const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const send = (kind: string, value: object) => { if (!ended) { try { controller.enqueue(encoder.encode(`event: ${kind}\ndata: ${JSON.stringify(value)}\n\n`)); } catch { stop(); } } };
-      const stop = () => { if (ended) return; ended = true; clearTimeout(timer); child.kill(); void cleanup(); try { controller.close(); } catch {} };
-      timer = setTimeout(() => { send("error", { message: "Đã hết thời gian theo dõi. Bạn có thể kết nối lại." }); stop(); }, 30 * 60 * 1000);
-      req.signal.addEventListener("abort", stop, { once: true });
-      if (req.signal.aborted) { stop(); return; }
-      send("status", { message: "Đang kết nối Kaggle..." });
-      child.stdout.on("data", (chunk: Buffer) => { const text = decoder.write(chunk); if (text) send("log", { text }); });
-      child.stderr.resume();
-      child.on("error", () => { send("error", { message: "Không thể chạy Kaggle CLI." }); stop(); });
-      child.on("close", code => { const remaining = decoder.end(); if (remaining) send("log", { text: remaining }); send(code === 0 ? "done" : "error", { message: code === 0 ? "Phiên theo dõi đã kết thúc." : "Kaggle không mở được logs trực tiếp cho notebook này. Hãy thử bản chụp bằng nút Làm mới hoặc kiểm tra quyền truy cập." }); stop(); });
+    async start(out) {
+      const send = (kind: string, data: object) => out.enqueue(encoder.encode(`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`));
+      try {
+        send("status", { message: "Đã kết nối Kaggle." }); let pending = "";
+        while (true) {
+          const chunk = await reader.read(); if (chunk.done) break;
+          const text = decoder.decode(chunk.value, { stream: true });
+          if (!isSSE) { pending = (pending + text).slice(-1024 * 1024); continue; }
+          pending += text;
+          if (pending.length > 1024 * 1024) throw new Error("large event");
+          let newline: number;
+          while ((newline = pending.indexOf("\n")) !== -1) {
+            const line = pending.slice(0, newline).replace(/\r$/, ""); pending = pending.slice(newline + 1);
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trimStart(); if (data === "END_OF_LOG") continue;
+            let rendered = data;
+            try { const event = JSON.parse(data); if (event && typeof event.data === "string") rendered = event.data; } catch {}
+            if (rendered) send("log", { text: rendered });
+          }
+        }
+        if (!isSSE && pending) {
+          let output = pending;
+          try { const events: unknown = JSON.parse(pending); if (Array.isArray(events)) output = events.map(event => typeof event?.data === "string" ? event.data : "").join(""); } catch {}
+          if (output) send("log", { text: output });
+        }
+        send("done", { message: "Phiên theo dõi đã kết thúc." });
+      } catch { if (!controller.signal.aborted) { try { send("error", { message: "Luồng logs bị gián đoạn. Vui lòng kết nối lại." }); } catch {} } }
+      finally { clearTimeout(timeout); try { out.close(); } catch {} }
     },
-    cancel() { if (!ended) { ended = true; clearTimeout(timer); child.kill(); void cleanup(); } },
+    cancel() { clearTimeout(timeout); controller.abort(); void reader.cancel(); },
   });
   return new Response(stream, { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } });
 }
@@ -52,18 +77,18 @@ async function handler(req: Request, ctx: Context) {
     if (path.length === 2 && method === "DELETE") { await db.query("DELETE FROM compute_accounts WHERE id=$1", [account.id]); return new Response(null, { status: 204 }); }
     if (path[2] === "credential" && method === "PATCH") { const token = required((await payload(req)).token, "Token", 10000); return json((await db.query(`UPDATE compute_accounts SET credential=$1,verified=false,last_verified_at=NULL WHERE id=$2 RETURNING ${fields}`, [encryptToken(token), account.id])).rows[0]); }
     if (path[2] === "verify" && method === "POST") {
-      let success = false; try { await runKaggle(decryptToken(account.credential), ["quota"]); success = true; } finally { await db.query("UPDATE compute_accounts SET verified=$1,last_verified_at=NOW() WHERE id=$2", [success, account.id]); }
+      let success = false; try { await kaggleCall(decryptToken(account.credential), "GetAcceleratorQuotaStatistics", {}); success = true; } finally { await db.query("UPDATE compute_accounts SET verified=$1,last_verified_at=NOW() WHERE id=$2", [success, account.id]); }
       return json((await db.query(`SELECT ${fields} FROM compute_accounts WHERE id=$1`, [account.id])).rows[0]);
     }
     if (path[2] === "sync" && method === "POST") {
       const token = decryptToken(account.credential), errors: Record<string, string> = {};
       let quota = null, notebooks = null, notebooks_truncated = false;
-      try { quota = parseResults((await runKaggle(token, ["quota", "--format", "json"])).text).data; } catch (e) { errors.quota = message(e).message; }
-      try { const out = parseResults((await runKaggle(token, ["kernels", "list", "--mine", "--page-size", "200", "--format", "json"])).text); notebooks = out.data; notebooks_truncated = out.truncated; } catch (e) { errors.notebooks = message(e).message; }
+      try { quota = normalizeQuota(await kaggleCall(token, "GetAcceleratorQuotaStatistics", {})); } catch (e) { errors.quota = message(e).message; }
+      try { const out = await kaggleCall(token, "ListKernels", { group: "PROFILE", pageSize: 100, language: "all", kernelType: "all", outputType: "all", sortBy: "HOTNESS" }); notebooks = Array.isArray(out.kernels) ? out.kernels : []; notebooks_truncated = Boolean(out.nextPageToken); } catch (e) { errors.notebooks = message(e).message; }
       return json({ synced_at: new Date().toISOString(), quota, notebooks, notebooks_truncated, errors });
     }
-    if (path[2] === "notebook-logs" && method === "GET") { const ref = validateRef(req), result = await runKaggle(decryptToken(account.credential), ["kernels", "logs", ref], 256 * 1024); return json({ ref, content: result.text, truncated: result.truncated, fetched_at: new Date().toISOString() }); }
-    if (path[2] === "notebook-logs-stream" && method === "GET") return streamLogs(req, decryptToken(account.credential), validateRef(req));
+    if (path[2] === "notebook-logs" && method === "GET") { const ref = validateRef(req), [userName, kernelSlug, versionLabel] = ref.split("/"); const result = await kaggleCall(decryptToken(account.credential), "ListKernelSessionOutput", { userName, kernelSlug, ...(versionLabel ? { versionLabel } : {}) }); const bytes = Buffer.from(typeof result.log === "string" ? result.log : "", "utf8"), limit = 256 * 1024; return json({ ref, content: bytes.subarray(-limit).toString("utf8").trim(), truncated: bytes.length > limit, fetched_at: new Date().toISOString() }); }
+    if (path[2] === "notebook-logs-stream" && method === "GET") return await streamLogs(req, decryptToken(account.credential), validateRef(req));
     throw new AppError(404, "Không tìm thấy API.");
   } catch (error) { const e = message(error); return json({ detail: e.message }, e.status); }
 }
