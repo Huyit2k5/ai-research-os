@@ -1,6 +1,6 @@
 # AI Research OS — Kaggle Account Manager
 
-Ứng dụng cá nhân quản lý các kết nối Kaggle. Xem [lộ trình](KAGGLE_CONNECTOR_ROADMAP.md).
+Ứng dụng cá nhân quản lý các kết nối Kaggle. Xem [lộ trình Kaggle Connector](docs/KAGGLE_CONNECTOR_ROADMAP.md) và [lộ trình kiến trúc AI Research OS](docs/AI_Research_OS_Architecture_Roadmap.md).
 
 ## Chạy bằng Docker Compose
 
