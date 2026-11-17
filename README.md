@@ -20,9 +20,15 @@ Khi khởi động, container chạy `scripts/migrate-auth.mjs` để tạo các
 
 ## Đăng nhập
 
-Khi chạy lần đầu, chọn **Tạo tài khoản** để đăng ký bằng email và mật khẩu tối thiểu 12 ký tự. Tài khoản Research OS đầu tiên sẽ tiếp nhận các kết nối Kaggle được tạo trước khi có đăng nhập; hãy tự tạo tài khoản đầu tiên trên máy của bạn. Các tài khoản đăng ký sau chỉ nhìn thấy kết nối của chính mình. Đăng nhập Research OS độc lập với tài khoản Kaggle.
+Khi chạy lần đầu, chọn **Tạo tài khoản** để đăng ký bằng email và mật khẩu tối thiểu 12 ký tự. Tài khoản Research OS đầu tiên sẽ tiếp nhận các kết nối Kaggle được tạo trước khi có đăng nhập; hãy tự tạo tài khoản đầu tiên trên máy của bạn. Mỗi tài khoản có sẵn một workspace "Cá nhân". Đăng nhập Research OS độc lập với tài khoản Kaggle.
 
-Ứng dụng dùng Better Auth và lưu phiên trong PostgreSQL. Đăng ký hiện đang mở và chưa có xác minh email, khôi phục mật khẩu, mời thành viên hoặc phân quyền workspace. Bản này chỉ dành cho phát triển cục bộ; trước khi đưa lên mạng cần cấu hình HTTPS, `BETTER_AUTH_URL` đúng tên miền, xác minh email, khôi phục mật khẩu và các biện pháp bảo mật triển khai. Khóa phiên đăng nhập mặc định được dẫn xuất từ `CREDENTIAL_ENCRYPTION_KEY`; giữ nguyên khóa để các phiên còn hiệu lực sau khi khởi động lại.
+Ứng dụng dùng Better Auth và lưu phiên trong PostgreSQL. Đăng ký hiện đang mở và chưa có xác minh email hoặc khôi phục mật khẩu. Bản này chỉ dành cho phát triển cục bộ; trước khi đưa lên mạng cần cấu hình HTTPS, `BETTER_AUTH_URL` đúng tên miền, xác minh email, khôi phục mật khẩu và các biện pháp bảo mật triển khai. Khóa phiên đăng nhập mặc định được dẫn xuất từ `CREDENTIAL_ENCRYPTION_KEY`; giữ nguyên khóa để các phiên còn hiệu lực sau khi khởi động lại.
+
+## Workspace nhóm
+
+Mở **Thành viên** để tạo workspace cho nhóm, chuyển workspace và mời thành viên. Owner hoặc admin nhập email người được mời, app tạo link mời (hết hạn sau 7 ngày); gửi link đó cho họ qua Zalo hoặc chat. Người nhận phải đăng nhập hoặc đăng ký **đúng email được mời** rồi mở link để tham gia.
+
+Thành viên trong workspace cùng thấy danh sách kết nối Kaggle và người tạo từng kết nối. Chỉ người tạo kết nối mới dùng được token của kết nối đó: đồng bộ, kiểm tra, lấy logs, theo dõi trực tiếp, đổi token. Kết quả đồng bộ và logs chưa được lưu để chia sẻ; chỉ người đồng bộ thấy trong phiên của mình. Owner và admin được xóa kết nối của thành viên khác nhưng không dùng được token của họ.
 
 ## Đồng bộ Kaggle
 
@@ -30,6 +36,6 @@ Sau khi thêm tài khoản và token, mở **Quota & tài nguyên** và nhấn *
 
 Trong **Logs & hoạt động**, chọn một notebook đã đồng bộ để lấy logs phiên gần nhất. Nhấn **Theo dõi trực tiếp** để nhận logs từ Kaggle và **Dừng theo dõi** khi hoàn tất; tính khả dụng phụ thuộc phiên notebook và Kaggle. Logs không lưu vào database và giới hạn hiển thị phần cuối. Trạng thái chạy chưa được tích hợp.
 
-Username do người dùng nhập chỉ là nhãn nhận diện, chưa được xác minh với token. Các kết nối được cách ly theo tài khoản Research OS; chia sẻ dữ liệu trong workspace chưa được triển khai.
+Username do người dùng nhập chỉ là nhãn nhận diện, chưa được xác minh với token. Các kết nối được cách ly theo workspace.
 
 Backend sử dụng Next.js; container không cài Python. Các lời gọi Kaggle dựa trên giao thức của SDK chính thức và có thể cần cập nhật nếu Kaggle thay đổi API. Cấu hình phát triển được kiểm tra là Docker Compose.

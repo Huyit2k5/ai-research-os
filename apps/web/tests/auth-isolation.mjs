@@ -28,4 +28,31 @@ assert.notEqual((await request("/api/auth/sign-in/email", { method: "POST", body
 const login = await request("/api/auth/sign-in/email", { method: "POST", body: { email: users[0].email, password: users[0].password } });
 assert.equal(login.status, 200);
 assert.equal((await request("/api/accounts", { cookie: login.cookie })).body.length, 2);
-console.log("Authentication, ownership, legacy migration and CSRF checks passed.");
+
+// Workspace sharing: members see everything, but only a connection's creator may use its token.
+const workspace = (await request("/api/workspace", { cookie: login.cookie })).body;
+assert.equal(workspace.role, "owner");
+const invite = await request("/api/auth/organization/invite-member", { method: "POST", cookie: login.cookie, body: { email: users[1].email, role: "member", organizationId: workspace.id } });
+assert.equal(invite.status, 200);
+assert.equal((await request("/api/auth/organization/accept-invitation", { method: "POST", cookie: second.cookie, body: { invitationId: invite.body.id } })).status, 200);
+assert.equal((await request("/api/auth/organization/set-active", { method: "POST", cookie: second.cookie, body: { organizationId: workspace.id } })).status, 200);
+assert.equal((await request("/api/workspace", { cookie: second.cookie })).body.id, workspace.id);
+const shared = (await request("/api/accounts", { cookie: second.cookie })).body;
+assert.equal(shared.length, 2);
+assert.ok(shared.every(account => account.mine === false && account.can_delete === false && account.creator === "First"));
+const target = shared[0].id, ref = "ref=owner%2Fnotebook";
+for (const [path, method, body] of [[`/api/accounts/${target}/sync`, "POST"], [`/api/accounts/${target}/verify`, "POST"], [`/api/accounts/${target}/credential`, "PATCH", { token: "stolen" }], [`/api/accounts/${target}/notebook-logs?${ref}`, "GET"], [`/api/accounts/${target}/notebook-logs-stream?${ref}`, "GET"], [`/api/accounts/${target}`, "DELETE"]])
+  assert.equal((await request(path, { method, cookie: second.cookie, body })).status, 403, `${method} ${path}`);
+// The workspace owner may delete a member's connection without being able to use its token.
+const memberAccount = await request("/api/accounts", { method: "POST", cookie: second.cookie, body: { label: "member", username: "member", token: "member-token" } });
+assert.equal(memberAccount.status, 201);
+const ownerView = (await request("/api/accounts", { cookie: login.cookie })).body.find(account => account.id === memberAccount.body.id);
+assert.equal(ownerView.mine, false); assert.equal(ownerView.can_delete, true); assert.equal(ownerView.creator, "Second");
+assert.equal((await request(`/api/accounts/${memberAccount.body.id}/sync`, { method: "POST", cookie: login.cookie })).status, 403);
+assert.equal((await request(`/api/accounts/${memberAccount.body.id}`, { method: "DELETE", cookie: login.cookie })).status, 204);
+// A removed member falls back to their own workspace and loses access.
+assert.equal((await request("/api/auth/organization/remove-member", { method: "POST", cookie: login.cookie, body: { memberIdOrEmail: users[1].email, organizationId: workspace.id } })).status, 200);
+assert.notEqual((await request("/api/workspace", { cookie: second.cookie })).body.id, workspace.id);
+assert.equal((await request("/api/accounts", { cookie: second.cookie })).body.length, 0);
+assert.equal((await request(`/api/accounts/${target}/notebook-logs?${ref}`, { cookie: second.cookie })).status, 404);
+console.log("Authentication, ownership, legacy migration, CSRF and workspace sharing checks passed.");

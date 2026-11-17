@@ -2,6 +2,7 @@ import "server-only";
 import { createHmac } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
+import { organization } from "better-auth/plugins";
 import { db } from "./server";
 
 const encryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY || "";
@@ -13,5 +14,5 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
   emailAndPassword: { enabled: true, minPasswordLength: 12, maxPasswordLength: 128 },
   rateLimit: { enabled: true, window: 60, max: 20 },
-  plugins: [nextCookies()],
+  plugins: [organization({ invitationExpiresIn: 7 * 24 * 60 * 60 }), nextCookies()],
 });
