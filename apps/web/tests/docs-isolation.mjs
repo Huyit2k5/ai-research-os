@@ -103,4 +103,64 @@ assert.equal((await request("/api/docs", { bearer: tB, origin: null })).status, 
 assert.equal((await request(`/api/docs/${linkedId}`, { method: "DELETE", cookie: a })).status, 204); ok("the creator deletes the doc");
 assert.equal((await request(`/api/docs/${linkedId}`, { cookie: a })).status, 404); ok("a deleted doc is gone");
 
+// 5. File uploads (presigned PUT → complete → presigned GET). The server must run with MinIO S3_* env and STORAGE_LIMIT_MB=1.
+const { AwsClient } = await import("aws4fetch");
+const s3 = new AwsClient({ accessKeyId: process.env.S3_ACCESS_KEY_ID ?? "minio", secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "minio-secret-123", service: "s3", region: process.env.S3_REGION ?? "us-east-1" });
+async function upload(cookie, { name, type, size, putBytes = size, putType = type, kind, complete = true }) {
+  const start = await request("/api/docs/uploads", { method: "POST", cookie, body: { file_name: name, content_type: type, size, ...(kind ? { kind } : {}) } });
+  if (start.status !== 200) return { start };
+  const put = await fetch(start.body.upload_url, { method: "PUT", headers: { ...start.body.headers, "content-type": putType }, body: new Uint8Array(putBytes).fill(66) }).catch(e => ({ ok: false, status: 0, error: e }));
+  const done = complete ? await request(`/api/docs/${start.body.id}/complete`, { method: "POST", cookie }) : null;
+  return { start, put, done, id: start.body.id };
+}
+const pdfName = `Báo cáo tuần 46 "final".pdf`;
+const pdf = await upload(a, { name: pdfName, type: "application/pdf", size: 1024, kind: "report" });
+assert.equal(pdf.start.status, 200); assert.equal(pdf.put.ok, true, `PUT ${pdf.put.status}`); assert.equal(pdf.done.status, 200); assert.equal(pdf.done.body.format, "file"); assert.equal(pdf.done.body.file_size, 1024); assert.equal(pdf.done.body.kind, "report"); ok("A uploads a PDF through a presigned PUT");
+assert.equal(pdf.done.body.title, pdfName); ok("title defaults to the file name");
+const view = await request(`/api/docs/${pdf.id}/file`, { cookie: a });
+assert.equal(view.status, 302); const viewUrl = view.headers.get("location"); assert.ok(viewUrl?.startsWith("http://127.0.0.1:59000/"), viewUrl); ok("GET /file redirects to the store");
+const fileRes = await fetch(viewUrl);
+assert.equal(fileRes.status, 200); assert.equal(fileRes.headers.get("content-type"), "application/pdf"); assert.equal((await fileRes.arrayBuffer()).byteLength, 1024);
+const disp = fileRes.headers.get("content-disposition");
+assert.ok(disp.startsWith("inline"), disp); assert.ok(disp.includes("filename*=UTF-8''B%C3%A1o%20c%C3%A1o%20tu%E1%BA%A7n%2046%20%22final%22.pdf"), disp); ok("PDF is served inline with an RFC 5987 Vietnamese filename");
+const dl = await fetch((await request(`/api/docs/${pdf.id}/file?download=1`, { cookie: a })).headers.get("location"));
+assert.ok(dl.headers.get("content-disposition").startsWith("attachment")); ok("?download=1 forces attachment");
+const asJson = await request(`/api/docs/${pdf.id}/file?url=1`, { cookie: a });
+assert.equal(asJson.status, 200); assert.ok(asJson.body.url.startsWith("http://127.0.0.1:59000/")); ok("?url=1 returns the presigned URL as JSON (for fetch without a cross-origin redirect)");
+assert.equal((await request(`/api/docs/${pdf.id}/file`, { cookie: b })).status, 404); ok("an outsider cannot get the file URL");
+for (const [name, type, mode] of [["x.svg", "image/svg+xml", "attachment"], ["x.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "attachment"], ["x.html", "text/html", "inline"], ["x.png", "image/png", "inline"]]) {
+  const u = await upload(a, { name, type, size: 16 });
+  const d = (await fetch((await request(`/api/docs/${u.id}/file`, { cookie: a })).headers.get("location"))).headers.get("content-disposition");
+  assert.ok(d.startsWith(mode), `${name}: ${d}`);
+  await request(`/api/docs/${u.id}`, { method: "DELETE", cookie: a });
+}
+ok("only PDF, raster images and HTML are inline; SVG and Word are attachments");
+const noType = await upload(a, { name: "data.bin", type: "", size: 8, putType: "application/octet-stream" });
+assert.equal(noType.done.status, 200); assert.equal(noType.done.body.file_type, "application/octet-stream"); ok("a missing content type becomes application/octet-stream");
+await request(`/api/docs/${noType.id}`, { method: "DELETE", cookie: a });
+
+const pending = await upload(a, { name: "pending.pdf", type: "application/pdf", size: 32, complete: false });
+assert.equal((await request("/api/docs?q=pending.pdf", { cookie: a })).body.total, 0); ok("a pending upload is not listed");
+assert.equal((await request(`/api/docs/${pending.id}`, { cookie: a })).status, 404); ok("a pending upload cannot be opened");
+const wrongLen = await upload(a, { name: "len.pdf", type: "application/pdf", size: 1024, putBytes: 2048 });
+assert.equal(wrongLen.put.ok, false); assert.equal(wrongLen.done.status, 422); ok("a PUT with a different length is refused and complete fails");
+assert.equal((await request(`/api/docs/${wrongLen.id}/complete`, { method: "POST", cookie: a })).status, 404); ok("a failed complete deletes the pending row");
+const nothing = await upload(a, { name: "none.pdf", type: "application/pdf", size: 64, putBytes: 0, complete: false });
+assert.equal((await request(`/api/docs/${nothing.id}/complete`, { method: "POST", cookie: a })).status, 422); ok("complete without an uploaded file fails");
+const spoof = await upload(a, { name: "spoof.pdf", type: "application/pdf", size: 64, complete: false });
+await s3.fetch(spoof.start.body.upload_url.split("?")[0], { method: "PUT", headers: { "content-type": "text/html" }, body: new Uint8Array(64) });
+assert.equal((await request(`/api/docs/${spoof.id}/complete`, { method: "POST", cookie: a })).status, 422); ok("complete rejects a stored type that differs from the declared one");
+assert.equal((await request(`/api/docs/${pending.id}/complete`, { method: "POST", cookie: b })).status, 404); ok("an outsider cannot complete someone else's upload");
+
+assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "big.pdf", content_type: "application/pdf", size: 25 * 1024 * 1024 + 1 } })).status, 413); ok("a file over 25 MB is refused");
+assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "zero.pdf", content_type: "application/pdf", size: 0 } })).status, 422); ok("an empty file is refused");
+const q1 = await upload(a, { name: "quota1.bin", type: "application/octet-stream", size: 600 * 1024 });
+assert.equal(q1.done.status, 200);
+assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "quota2.bin", content_type: "application/octet-stream", size: 600 * 1024 } })).status, 413); ok("the project-wide storage limit is enforced");
+await request(`/api/docs/${q1.id}`, { method: "DELETE", cookie: a });
+
+assert.equal((await request(`/api/docs/${pdf.id}`, { method: "PATCH", cookie: a, body: { body: "x" } })).status, 422); ok("a file doc's content cannot be replaced by text");
+assert.equal((await request(`/api/docs/${pdf.id}`, { method: "DELETE", cookie: a })).status, 204);
+assert.equal((await fetch(viewUrl)).status, 404); ok("deleting a file doc removes the stored object");
+
 console.log(`\n${passed} checks passed.`);

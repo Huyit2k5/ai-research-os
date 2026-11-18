@@ -1,7 +1,10 @@
 import "server-only";
 import type { PoolClient } from "pg";
+import { randomUUID } from "node:crypto";
 import { AppError, db } from "./server";
 import { initExperiments } from "./experiments";
+import { rateLimit } from "./papers";
+import { deleteObject, headObject, presignGet, presignPut, storageConfigured } from "./storage";
 import { canManage, type Scope } from "./workspace";
 
 let ready: Promise<unknown> | undefined;
@@ -19,7 +22,11 @@ export function initDocs() {
 }
 
 export const DOC_KINDS = ["idea", "report", "other"] as const, IDEA_STATUSES = ["new", "trying", "chosen", "dropped"] as const;
-export const MAX_DOCS = 5000, MAX_BODY = 512 * 1024, MAX_TITLE = 300, MAX_LINKS = 50;
+export const MAX_DOCS = 5000, MAX_BODY = 512 * 1024, MAX_TITLE = 300, MAX_LINKS = 50, MAX_FILE = 25 * 1024 * 1024;
+/** Served inline from the store; everything else (SVG, Word, …) is forced to download. */
+export const INLINE_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "text/html"];
+/** Project-wide cap (R2's free 10 GB is for the whole account, shared by every workspace). */
+const storageLimit = () => (Number(process.env.STORAGE_LIMIT_MB) > 0 ? Number(process.env.STORAGE_LIMIT_MB) : 9000) * 1024 * 1024;
 export type DocRow = { id: number; kind: string; title: string; status: string | null; format: string; tags: string[]; file_name: string | null; file_type: string | null; file_size: number | null; created_via: "web" | "api"; created_by: string | null; can_delete: boolean; paper_count: number; run_count: number; created_at: string; updated_at: string };
 
 const FIELDS = `d.id, d.kind, d.title, d.status, d.format, d.tags, d.file_name, d.file_type, d.file_size::float8 AS file_size, d.created_via, d.created_at, d.updated_at, d.owner_id, u.name AS created_by,
@@ -132,4 +139,62 @@ export async function deleteDoc(s: Scope, idRaw: unknown) {
   if (!canManage(s, r.owner_id)) throw new AppError(403, "Chỉ người tạo tài liệu hoặc quản trị workspace mới được xóa.");
   await db.query("DELETE FROM documents WHERE id=$1", [id]);
   return { file_key: r.file_key as string | null };
+}
+
+const mimeOf = (v: unknown) => { const t = typeof v === "string" ? v.split(";")[0].trim().toLowerCase() : ""; return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(t) && t.length <= 255 ? t : "application/octet-stream"; };
+const fileNameOf = (v: unknown) => { const n = typeof v === "string" ? (v.split(/[\\/]/).pop() ?? "").trim().slice(0, 255) : ""; if (!n) throw new AppError(422, "Tên file không hợp lệ."); return n; };
+const dropObject = (key: string) => deleteObject(key).catch(e => console.error("storage delete failed:", e instanceof Error ? e.message : e));
+
+/** Step 1 of an upload: checks limits, reserves a pending row and returns a presigned PUT bound to type + size. */
+export async function startUpload(s: Scope, via: "web" | "api", f: Record<string, unknown>) {
+  await initDocs();
+  if (!storageConfigured()) throw new AppError(503, "Chưa cấu hình kho file nên chưa upload được.");
+  const fileName = fileNameOf(f.file_name), type = mimeOf(f.content_type), size = Number(f.size);
+  if (!Number.isInteger(size) || size < 1) throw new AppError(422, "File rỗng hoặc dung lượng không hợp lệ.");
+  if (size > MAX_FILE) throw new AppError(413, "File vượt quá 25 MB.");
+  const b = baseFields({ ...f, kind: f.kind ?? "other", title: f.title ?? fileName.slice(0, MAX_TITLE) });
+  await rateLimit(s.userId, "doc-upload", 30, 60);
+  // Uploads abandoned for over an hour are swept here, so they stop counting toward the limit.
+  for (const old of (await db.query("DELETE FROM documents WHERE upload_state='pending' AND created_at < NOW() - INTERVAL '1 hour' RETURNING file_key")).rows) void dropObject(old.file_key);
+  await assertRoom(s);
+  const used = Number((await db.query("SELECT COALESCE(SUM(file_size),0)::float8 AS n FROM documents")).rows[0].n);
+  if (used + size > storageLimit()) throw new AppError(413, "Kho file đã gần đầy; hãy xóa bớt file cũ.");
+  const key = `ws/${s.workspaceId}/${randomUUID()}`;
+  const id = await tx(async c => {
+    const id = (await c.query("INSERT INTO documents (workspace_id, owner_id, kind, title, status, format, file_key, file_name, file_type, file_size, upload_state, tags, created_via, updated_by) VALUES ($1,$2,$3,$4,$5,'file',$6,$7,$8,$9,'pending',$10,$11,$2) RETURNING id", [s.workspaceId, s.userId, b.kind, b.title, b.status, key, fileName, type, size, b.tags, via])).rows[0].id as number;
+    await setLinks(c, s, id, f);
+    return id;
+  });
+  const put = await presignPut(key, type, size);
+  return { id, upload_url: put.url, headers: put.headers };
+}
+
+/** Step 3: the stored object must match the declared size and type, otherwise both the object and the row are removed. */
+export async function completeUpload(s: Scope, idRaw: unknown) {
+  await initDocs();
+  const id = docId(idRaw);
+  const r = (await db.query("SELECT file_key, file_size::float8 AS file_size, file_type FROM documents WHERE id=$1 AND workspace_id=$2 AND owner_id=$3 AND upload_state='pending'", [id, s.workspaceId, s.userId])).rows[0];
+  if (!r) throw new AppError(404, "Không tìm thấy upload đang chờ.");
+  const head = await headObject(r.file_key);
+  if (!head || head.size !== r.file_size || head.contentType !== r.file_type) {
+    if (head) await dropObject(r.file_key);
+    await db.query("DELETE FROM documents WHERE id=$1", [id]);
+    throw new AppError(422, head ? "File đã tải lên không khớp dung lượng hoặc loại đã khai báo." : "Chưa thấy file trên kho; hãy upload lại.");
+  }
+  await db.query("UPDATE documents SET upload_state='ready', updated_at=NOW() WHERE id=$1", [id]);
+  return row(s, id);
+}
+
+/** Short-lived presigned GET; inline only for INLINE_TYPES unless a download is requested. */
+export async function fileUrl(s: Scope, idRaw: unknown, download: boolean) {
+  await initDocs();
+  const r = (await db.query("SELECT file_key, file_name, file_type FROM documents WHERE id=$1 AND workspace_id=$2 AND format='file' AND upload_state='ready'", [docId(idRaw), s.workspaceId])).rows[0];
+  if (!r) throw new AppError(404, "Không tìm thấy file.");
+  return presignGet(r.file_key, { fileName: r.file_name, contentType: r.file_type, inline: !download && INLINE_TYPES.includes(r.file_type) });
+}
+
+/** Deletes the row, then the stored file (a failed object delete only leaves an orphan, it never blocks the user). */
+export async function deleteDocAndFile(s: Scope, idRaw: unknown) {
+  const { file_key } = await deleteDoc(s, idRaw);
+  if (file_key) await dropObject(file_key);
 }

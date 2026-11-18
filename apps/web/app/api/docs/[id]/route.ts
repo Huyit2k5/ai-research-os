@@ -1,6 +1,6 @@
 import { AppError } from "../../../../lib/server";
 import { fail, json, owner } from "../../../../lib/papers";
-import { deleteDoc, getDoc, updateDoc } from "../../../../lib/documents";
+import { deleteDocAndFile, getDoc, updateDoc } from "../../../../lib/documents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,5 +20,5 @@ export async function PATCH(req: Request, { params }: Ctx) {
 }
 
 export async function DELETE(req: Request, { params }: Ctx) {
-  try { await deleteDoc(await owner(req, { allowToken: true }), (await params).id); return new Response(null, { status: 204 }); } catch (e) { return fail(e); }
+  try { await deleteDocAndFile(await owner(req, { allowToken: true }), (await params).id); return new Response(null, { status: 204 }); } catch (e) { return fail(e); }
 }
