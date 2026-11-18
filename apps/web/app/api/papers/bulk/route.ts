@@ -9,5 +9,7 @@ export async function POST(req: Request) {
     const s = await owner(req);
     const body = await req.json().catch(() => null);
     return json(await bulkPapers(s, body?.ids, body?.action, body?.value));
-  } catch (e) { return fail(e); }
+  } catch (e) {
+    return fail(e);
+  }
 }

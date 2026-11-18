@@ -10,5 +10,7 @@ export async function POST(req: Request) {
     await rateLimit(s.userId, "refresh", 30, 3600);
     const body = await req.json().catch(() => null);
     return json(await refreshMetadata(s, body?.ids));
-  } catch (e) { return fail(e); }
+  } catch (e) {
+    return fail(e);
+  }
 }

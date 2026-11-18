@@ -9,7 +9,13 @@ export async function POST(req: Request) {
     const s = await owner(req);
     await rateLimit(s.userId, "search", 20, 60);
     const body = await req.json().catch(() => null);
-    const { paper, created } = await savePaper(s, await importPaper(typeof body?.identifier === "string" ? body.identifier : ""), "manual");
+    const { paper, created } = await savePaper(
+      s,
+      await importPaper(typeof body?.identifier === "string" ? body.identifier : ""),
+      "manual",
+    );
     return json({ ...paper, created }, created ? 201 : 200);
-  } catch (e) { return fail(e); }
+  } catch (e) {
+    return fail(e);
+  }
 }
