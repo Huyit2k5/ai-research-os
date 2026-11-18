@@ -89,6 +89,7 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 async function push(id: number) {
   const r = (await db.query("SELECT r.*, a.credential FROM run_requests r JOIN compute_accounts a ON a.id=r.account_id WHERE r.id=$1 AND r.status='approved'", [id])).rows[0];
   if (!r) throw new AppError(409, "Yêu cầu này không còn ở trạng thái đã duyệt.");
+  let sent = false;
   try {
     const token = decryptToken(r.credential);
     let current: Record<string, unknown> | null = null, code: string = r.code, kernelType: "notebook" | "script" = r.kernel_type;
@@ -104,10 +105,12 @@ async function push(id: number) {
     }
     const saved = await kaggleCall(token, "SaveKernel", body);
     if (typeof saved.error === "string" && saved.error) throw new AppError(502, `Kaggle từ chối: ${saved.error.slice(0, 300)}`);
+    sent = true; // from here Kaggle is running it: never go back to pending, or a re-approve would run it twice
     await db.query("UPDATE run_requests SET status='running', ref=$2, version=$3, code=$4, kernel_type=$5, error=NULL, updated_at=NOW() WHERE id=$1", [id, savedRef(saved.ref) ?? r.ref, Number.isInteger(saved.versionNumber) ? saved.versionNumber : null, code, kernelType]);
     if (r.idea_id) await db.query("UPDATE documents SET status='trying', updated_at=NOW() WHERE id=$1 AND kind='idea' AND status='new'", [r.idea_id]);
   } catch (e) {
     const err = e instanceof AppError ? e : new AppError(502, "Không gửi được lên Kaggle.");
+    if (sent) { await db.query("UPDATE run_requests SET status='running', updated_at=NOW() WHERE id=$1 AND status='approved'", [id]).catch(() => {}); throw new AppError(500, "Kaggle đã nhận và đang chạy, nhưng lưu trạng thái bị lỗi. Đừng duyệt lại; hãy tải lại trang."); }
     await db.query("UPDATE run_requests SET status='pending', reviewed_by=NULL, reviewed_at=NULL, error=$2, updated_at=NOW() WHERE id=$1", [id, err.message]);
     throw err;
   }

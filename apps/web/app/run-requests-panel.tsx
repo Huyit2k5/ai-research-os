@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, ExternalLink, PlayCircle, X } from "lucide-react";
-import { ago, machineOf, MACHINE_LABEL, REQUEST_STATUS, VIA_LABEL, type RunRequest } from "./run-request-shared";
+import { ago, machineOf, MACHINE_LABEL, REQUEST_STATUS, settingNotes, VIA_LABEL, type RunRequest } from "./run-request-shared";
 
 async function post(path: string, body: object = {}) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), data = await r.json().catch(() => ({}));
@@ -33,7 +33,7 @@ export default function RequestsPanel({ status, onChange }: { status: "pending" 
     {items === null ? <div className="empty">Đang tải...</div> : items.length === 0 ? <div className="empty">{status === "pending" ? "Không có yêu cầu nào chờ duyệt." : "Không có notebook nào đang chạy từ app."}</div>
       : items.map(r => <article key={r.id} className="rq-card">
         <div className="rq-card-head"><a href={`/run-requests/${r.id}`} target="_blank" rel="noreferrer"><b>#{r.id} {r.ref ?? r.new_title}</b>{r.version ? ` · v${r.version}` : ""} <ExternalLink size={12} /></a><span className={`rq-status s-${r.status}`}>{REQUEST_STATUS[r.status] ?? r.status}</span></div>
-        <p className="rn-muted">{r.account_label} · {machineOf(r)}{r.idea_title ? ` · ý tưởng: ${r.idea_title}` : ""}</p>
+        <p className="rn-muted">{r.account_label} · {machineOf(r)}{settingNotes(r).map(n => <span key={n} className={n.startsWith("⚠") ? "rq-warn" : ""}> · {n}</span>)}{r.idea_title ? ` · ý tưởng: ${r.idea_title}` : ""}</p>
         <p className="rn-muted">{VIA_LABEL[r.requested_via]} · {r.requested_by_name ?? "?"} · {ago(r.created_at)}</p>
         {r.summary && <p className="rq-card-summary">{r.summary.length > 280 ? r.summary.slice(0, 280) + "…" : r.summary}</p>}
         {r.error && <p className="sync-error">{r.error}</p>}

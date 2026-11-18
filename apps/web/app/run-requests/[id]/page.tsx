@@ -5,7 +5,7 @@ import { diffLines } from "diff";
 import { Check, ExternalLink, PlayCircle, X } from "lucide-react";
 import NotebookView from "../../notebook-view";
 import LiveLog from "../../live-log";
-import { ago, machineOf, REQUEST_STATUS, VIA_LABEL, type RunRequest } from "../../run-request-shared";
+import { ago, machineOf, REQUEST_STATUS, settingNotes, VIA_LABEL, type RunRequest } from "../../run-request-shared";
 
 /** Code cells only, so the diff shows code changes and not notebook JSON noise. */
 function codeText(code: string) {
@@ -51,7 +51,7 @@ export default function RunRequestPage({ params }: { params: Promise<{ id: strin
       <div className="eyebrow"><span /> YÊU CẦU CHẠY NOTEBOOK</div>
       <h1><PlayCircle size={22} /> {req ? <><span className="rn-id">#{req.id}</span> {name}{req.version ? ` · v${req.version}` : ""}</> : "Đang tải..."}</h1>
       {req && <>
-        <p className="rn-meta"><span className={`rq-status s-${req.status}`}>{REQUEST_STATUS[req.status] ?? req.status}</span><span>{req.account_label}</span><span>{machineOf(req)}{req.settings.enable_internet ? " · internet" : ""}</span>{req.idea_id && <a className="rn-link" href={`/docs/${req.idea_id}`} target="_blank" rel="noreferrer">Ý tưởng: {req.idea_title}</a>}{req.ref && <a className="rn-link" href={`https://www.kaggle.com/code/${req.ref}`} target="_blank" rel="noreferrer">Mở Kaggle <ExternalLink size={12} /></a>}{req.run_id && <a className="rn-link" href={`/runs/${req.run_id}/code`} target="_blank" rel="noreferrer">Run #{req.run_id}</a>}</p>
+        <p className="rn-meta"><span className={`rq-status s-${req.status}`}>{REQUEST_STATUS[req.status] ?? req.status}</span><span>{req.account_label}</span><span>{machineOf(req)}</span>{settingNotes(req).map(n => <span key={n} className={n.startsWith("⚠") ? "rq-warn" : ""}>{n}</span>)}{req.idea_id && <a className="rn-link" href={`/docs/${req.idea_id}`} target="_blank" rel="noreferrer">Ý tưởng: {req.idea_title}</a>}{req.ref && <a className="rn-link" href={`https://www.kaggle.com/code/${req.ref}`} target="_blank" rel="noreferrer">Mở Kaggle <ExternalLink size={12} /></a>}{req.run_id && <a className="rn-link" href={`/runs/${req.run_id}/code`} target="_blank" rel="noreferrer">Run #{req.run_id}</a>}</p>
         <p className="rn-muted">{VIA_LABEL[req.requested_via]} · {req.requested_by_name ?? "?"} · {ago(req.created_at)}{req.reviewed_by_name ? ` · duyệt/từ chối bởi ${req.reviewed_by_name}` : ""}</p>
         {req.summary && <blockquote className="rq-summary">{req.summary}</blockquote>}
         {req.review_note && <div className="alert error">Ghi chú khi từ chối: {req.review_note}</div>}
