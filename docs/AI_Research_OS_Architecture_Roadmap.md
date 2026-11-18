@@ -128,7 +128,9 @@ flowchart TB
     PAPER --> ZOT[Zotero]
     COMPUTE --> KAG[Kaggle]
     REPRO --> GIT[GitHub]
-    AGENT --> LLM[LLM Providers]
+    AGENT --> LLM[LLM Providers - tùy chọn cho tác vụ nền]
+    MCPS[MCP Server: Research OS tools] --> API
+    CLAUDE[Claude Desktop / Claude Code / MCP client] -->|MCP| MCPS
     PLAN --> NOTIFY[Telegram / Email]
 ```
 
@@ -173,7 +175,7 @@ flowchart TB
 | Vector Search | pgvector | Embeddings và similarity search |
 | Queue / Jobs | Redis, Celery, Celery Beat | Jobs và lịch định kỳ |
 | AI Agent | LangGraph | Multi-step orchestration, checkpoints |
-| LLM | Provider abstraction | Đổi model dễ, quản lý chi phí |
+| LLM | MCP-first + `LLMProvider` tùy chọn | Dùng Claude qua MCP thay API key; provider/model local chỉ cho tác vụ nền |
 | PDF | PyMuPDF + parser cấu trúc | Trích xuất nội dung và trang |
 | MLOps | MLflow | Experiment tracking |
 | Artifacts | MinIO / S3-compatible storage | PDFs, checkpoints, exports |
@@ -183,7 +185,21 @@ flowchart TB
 | CI/CD | GitHub Actions | Test tự động, build, deploy |
 | Observability | Structured logs, metrics, traces | Điều tra lỗi và usage |
 
-**Lưu ý:** Có thể khởi đầu bằng OpenAI API hoặc một provider khác; thiết kế interface `LLMProvider` để tránh khóa cứng toàn bộ ứng dụng vào một model.
+**Lưu ý:** Hướng ưu tiên là **MCP-first** (xem 4.1). Không cần API key để bắt đầu. `LLMProvider` chỉ là cổng tùy chọn cho tác vụ nền, để tránh khóa cứng vào một model.
+
+### 4.1. Tích hợp AI qua MCP (thay API key)
+
+Research OS chạy một **MCP server** (Streamable HTTP, có xác thực) để các AI client như Claude Desktop hoặc Claude Code gọi vào. AI dùng đăng nhập/gói thuê bao của chính người dùng, nên ứng dụng không giữ và không tính phí API key.
+
+**Tools đề xuất (phiên bản đầu, ưu tiên chỉ đọc):** `search_papers`, `get_paper`, `list_compute_accounts`, `get_kaggle_quota`, `get_notebook_logs`, `save_note`, `list_experiments`.
+**Resources:** tóm tắt project, danh sách paper, kết quả experiment. **Prompts:** mẫu như tổng quan literature, gap analysis, báo cáo tuần.
+
+**Giới hạn cần chấp nhận:**
+- MCP là chiều *client gọi server*; app không tự gọi Claude được. Mọi suy luận diễn ra trong phiên của người dùng, không chạy khi không có phiên mở.
+- Celery job, workflow theo lịch, embeddings, báo cáo tự động không dùng MCP được. Các việc này hoặc do người dùng kích hoạt từ Claude, hoặc dùng `LLMProvider` (API key/model local) nếu bật.
+- Tool trả dữ liệu từ PDF/web là dữ liệu không tin cậy (prompt injection); tool có tác động (chạy GPU job, xóa, gửi) phải có xác nhận của người dùng và quyền tối thiểu.
+- Xác thực: OAuth/token theo từng người dùng, giới hạn theo workspace; không đưa token Kaggle hay credential vào kết quả tool.
+- Không có token usage chính xác từ phía MCP; theo dõi số lần gọi tool thay vì chi phí token.
 
 ---
 
@@ -493,7 +509,8 @@ Tính năng cần có:
 
 ### 6.8. System Monitoring & AI Cost
 
-- Lưu LLM provider, model, prompt version, tokens, estimated cost.
+- Lưu số lần gọi MCP tool, client, latency, lỗi theo từng người dùng.
+- Nếu bật `LLMProvider` cho tác vụ nền: lưu provider, model, prompt version, tokens, estimated cost.
 - Lưu số lượng tool calls, latency, retries, failed jobs.
 - Dashboard API budget theo project và workflow.
 - Quota alert, budget cap, max token/request, retention policy.
@@ -742,7 +759,7 @@ flowchart TD
 ### 10.3. Chi phí cần kiểm soát
 
 Nguồn chi phí:
-- LLM API tokens và embeddings.
+- LLM API tokens và embeddings (chỉ khi bật tác vụ nền; chế độ MCP không phát sinh).
 - Database, storage, backup, network traffic.
 - VPS/worker, logs và monitoring.
 - GPU compute nếu có sử dụng tài nguyên trả phí.

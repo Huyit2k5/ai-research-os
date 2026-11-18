@@ -8,7 +8,7 @@ export const db = globalPool.researchPool ??= new Pool({ connectionString: proce
 let initialized: Promise<unknown> | undefined;
 // RLS with no policies blocks Supabase's public Data API (anon/authenticated); the owning role used here bypasses it.
 export function initialize() {
-  initialized ??= db.query(`CREATE TABLE IF NOT EXISTS compute_accounts (id SERIAL PRIMARY KEY, label VARCHAR(100) NOT NULL, username VARCHAR(100) NOT NULL, credential TEXT NOT NULL, verified BOOLEAN NOT NULL DEFAULT FALSE, last_verified_at TIMESTAMPTZ); ALTER TABLE compute_accounts ENABLE ROW LEVEL SECURITY` ).catch(err => { initialized = undefined; throw err; });
+  initialized ??= db.query(`CREATE TABLE IF NOT EXISTS compute_accounts (id SERIAL PRIMARY KEY, label VARCHAR(100) NOT NULL, username VARCHAR(100) NOT NULL, credential TEXT NOT NULL, verified BOOLEAN NOT NULL DEFAULT FALSE, last_verified_at TIMESTAMPTZ); ALTER TABLE compute_accounts ENABLE ROW LEVEL SECURITY; CREATE TABLE IF NOT EXISTS account_sync (account_id INTEGER PRIMARY KEY REFERENCES compute_accounts(id) ON DELETE CASCADE, synced_at TIMESTAMPTZ NOT NULL, quota JSONB, notebooks JSONB, notebooks_truncated BOOLEAN NOT NULL DEFAULT FALSE, errors JSONB NOT NULL DEFAULT '{}'::jsonb); CREATE TABLE IF NOT EXISTS quota_snapshots (id BIGSERIAL PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES compute_accounts(id) ON DELETE CASCADE, captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), quota JSONB NOT NULL); CREATE INDEX IF NOT EXISTS quota_snapshots_account_idx ON quota_snapshots(account_id, captured_at DESC); ALTER TABLE account_sync ENABLE ROW LEVEL SECURITY; ALTER TABLE quota_snapshots ENABLE ROW LEVEL SECURITY` ).catch(err => { initialized = undefined; throw err; });
   return initialized;
 }
 function keyBytes() {
@@ -48,11 +48,11 @@ export async function accountById(id: string, workspaceId: string) {
 export async function kaggleCall(token: string, method: string, body: object): Promise<Record<string, unknown>> {
   try {
     const response = await fetch(`https://api.kaggle.com/v1/kernels.KernelsApiService/${method}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store", signal: AbortSignal.timeout(45000) });
-    if (!response.ok) throw new Error();
+    if (!response.ok) { console.error(`Kaggle ${method} failed: HTTP ${response.status}`); throw new AppError(502, response.status === 401 || response.status === 403 ? "Kaggle từ chối token (HTTP " + response.status + "). Hãy tạo token mới và cập nhật kết nối." : `Kaggle trả lỗi HTTP ${response.status} khi gọi ${method}.`); }
     const data: unknown = await response.json();
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error();
     return data as Record<string, unknown>;
-  } catch { throw new AppError(502, "Kaggle không trả dữ liệu. Kiểm tra token, quyền truy cập và kết nối mạng."); }
+  } catch (e) { if (e instanceof AppError) throw e; console.error(`Kaggle ${method} error: ${e instanceof Error ? e.name : "unknown"}`); throw new AppError(502, "Không kết nối được Kaggle (lỗi mạng hoặc quá thời gian chờ)."); }
 }
 export function normalizeQuota(data: Record<string, unknown>) {
   return ([["GPU", data.gpuQuota], ["TPU", data.tpuQuota]] as const).flatMap(([resource, raw]) => {
