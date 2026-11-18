@@ -14,3 +14,4 @@
 .log-group-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 4px;padding:6px 10px;border-radius:6px;background:#eef3fb;font-size:13px;font-weight:700;letter-spacing:.02em;color:#5b6b82}
 .log-group-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.log-group-head small{flex:none;font-weight:600;color:#7c8ea6}
 .nb-filter{margin:0;min-width:220px}
+.log-version{display:flex;align-items:flex-end;gap:10px}.log-version label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#8799ad}.log-version select,.log-version input{width:150px;padding:9px 10px;border:1px solid #dfe8f2;border-radius:8px;background:#fff;font-size:14.5px;color:#203655;text-transform:none;letter-spacing:0;font-weight:500}
