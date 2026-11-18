@@ -163,4 +163,27 @@ assert.equal((await request(`/api/docs/${pdf.id}`, { method: "PATCH", cookie: a,
 assert.equal((await request(`/api/docs/${pdf.id}`, { method: "DELETE", cookie: a })).status, 204);
 assert.equal((await fetch(viewUrl)).status, 404); ok("deleting a file doc removes the stored object");
 
+// 6. MCP tools
+const mcp = (bearer, method, params, id = 1) => request("/api/mcp", { method: "POST", bearer, origin: null, body: { jsonrpc: "2.0", id, method, params } });
+const tool = async (bearer, name, args) => { const r = await mcp(bearer, "tools/call", { name, arguments: args }); return { isError: !!r.body?.result?.isError, data: (() => { try { return JSON.parse(r.body?.result?.content?.[0]?.text ?? "null"); } catch { return r.body?.result?.content?.[0]?.text; } })() }; };
+const tools = (await mcp(tA, "tools/list", {})).body.result.tools;
+for (const name of ["list_docs", "get_doc", "create_doc", "update_doc", "delete_doc"]) assert.ok(tools.some(t => t.name === name), name);
+assert.equal(tools.find(t => t.name === "delete_doc").annotations.destructiveHint, true); assert.equal(tools.find(t => t.name === "get_doc").annotations.readOnlyHint, true); ok("tools/list has the 5 doc tools with hints");
+const html = "<h1>Tuần 46</h1><script>alert(1)</script>";
+const made = await tool(tA, "create_doc", { kind: "report", title: `MCP report ${stamp}`, format: "html", body: html, tags: ["mcp"] });
+assert.equal(made.isError, false, JSON.stringify(made.data)); assert.equal(made.data.created_via, "api"); ok("create_doc creates a report via api");
+const got = await tool(tA, "get_doc", { id: made.data.id });
+assert.equal(got.data.body, html); assert.equal(got.data.format, "html"); ok("get_doc returns the body unchanged");
+const rA2 = (await request("/api/runs", { method: "POST", cookie: a, body: { name: `docs iso run 2 ${stamp}`, metrics: { val_acc: 0.91 } } })).body;
+const upd = await tool(tA, "update_doc", { id: made.data.id, run_ids: [rA2.id], title: `MCP report v2 ${stamp}` });
+assert.equal(upd.isError, false, JSON.stringify(upd.data)); assert.equal(upd.data.run_count, 1); assert.equal(upd.data.title, `MCP report v2 ${stamp}`); ok("update_doc links a run and renames");
+const listed = await tool(tA, "list_docs", { kind: "report", tag: "mcp" });
+assert.ok(listed.data.items.some(d => d.id === made.data.id)); ok("list_docs filters by kind and tag");
+assert.equal((await tool(tA, "create_doc", { kind: "report", title: "x", format: "file", body: "x" })).isError, true); ok("create_doc rejects format=file");
+const tB2 = (await request("/api/tokens", { method: "POST", cookie: b, body: { name: "docs-iso-b2" } })).body.token;
+assert.equal((await tool(tB2, "get_doc", { id: made.data.id })).isError, true); ok("another workspace's token cannot read the doc");
+assert.equal((await tool(tB2, "delete_doc", { id: made.data.id })).isError, true); ok("another workspace's token cannot delete the doc");
+assert.equal((await tool(tA, "delete_doc", { id: made.data.id })).isError, false);
+assert.equal((await tool(tA, "get_doc", { id: made.data.id })).isError, true); ok("delete_doc removes the doc");
+
 console.log(`\n${passed} checks passed.`);
