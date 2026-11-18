@@ -24,7 +24,7 @@ function formatLog(content: string) {
 export default function LogsScreen({ accounts, data, navigate }: { accounts: Account[]; data: Record<number, SyncData>; navigate: () => void }) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [result, setResult] = useState<LogResult | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(""); const [accountFilter, setAccountFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [live, setLive] = useState(false);
@@ -60,7 +60,12 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
     if (!/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(ref)) return [];
     return [{ account, ref, title: typeof item.title === "string" ? item.title : ref }];
   }));
-  const filtered = notebooks.filter(item => `${item.title} ${item.ref} ${item.account.label}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const filtered = notebooks.filter(item => (!accountFilter || String(item.account.id) === accountFilter) && `${item.title} ${item.ref} ${item.account.label} ${item.account.username}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  // Accounts that have notebooks; labels are not unique, so the username is appended when two accounts share a label.
+  const withNotebooks = accounts.filter(account => notebooks.some(item => item.account.id === account.id));
+  const accountName = (account: Account) => withNotebooks.filter(other => other.label === account.label).length > 1 ? `${account.label} (@${account.username})` : account.label;
+  const multi = withNotebooks.length > 1;
+  const groups = withNotebooks.map(account => ({ account, items: filtered.filter(item => item.account.id === account.id) })).filter(group => group.items.length);
 
   async function load(item: Selection) {
     const id = ++requestId.current;
@@ -110,12 +115,13 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
   return <>
     <div className="heading screen-heading"><div><div className="eyebrow"><span /> THEO DÕI</div><h1>Logs & hoạt động</h1><p>Chọn notebook để xem logs của phiên gần nhất trên Kaggle.</p></div></div>
     <div className="info-banner"><TerminalSquare size={18} /><div><b>Logs và theo dõi trực tiếp</b><p>Chọn notebook để xem bản chụp hoặc theo dõi logs trực tiếp khi Kaggle cung cấp.</p></div></div>
-    <div className="logs-grid"><section className="panel logs-list-panel"><div className="panel-heading"><div><h2>Notebook</h2><p>Danh sách từ các tài khoản đã đồng bộ.</p></div></div>
+    <div className="logs-grid"><section className="panel logs-list-panel"><div className="panel-heading"><div><h2>Notebook</h2><p>{multi ? `${notebooks.length} notebook từ ${withNotebooks.length} tài khoản đã đồng bộ.` : "Danh sách từ các tài khoản đã đồng bộ."}</p></div></div>
+      {multi && <label className="log-filter"><span>Tài khoản</span><select value={accountFilter} onChange={event => setAccountFilter(event.target.value)} aria-label="Lọc theo tài khoản"><option value="">Tất cả tài khoản ({withNotebooks.length})</option>{withNotebooks.map(account => <option key={account.id} value={account.id}>{accountName(account)}</option>)}</select></label>}
       {notebooks.length > 0 && <label className="log-search"><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Tìm notebook" aria-label="Tìm notebook" /></label>}
-      <div className="logs-list">{filtered.map(item => <button key={`${item.account.id}:${item.ref}`} className={`log-notebook ${selection?.account.id === item.account.id && selection.ref === item.ref ? "selected" : ""}`} onClick={() => void load(item)}><BookOpen size={18}/><span><b>{item.title}</b><small>{item.account.label} · {item.ref}</small></span></button>)}
+      <div className="logs-list">{groups.map(group => <div className="log-group" key={group.account.id}>{multi && <div className="log-group-head"><span>{accountName(group.account)}</span><small>{group.items.length}</small></div>}{group.items.map(item => <button key={`${item.account.id}:${item.ref}`} className={`log-notebook ${selection?.account.id === item.account.id && selection.ref === item.ref ? "selected" : ""}`} onClick={() => void load(item)}><BookOpen size={18}/><span><b>{item.title}</b><small>{multi ? item.ref : `${item.account.label} · ${item.ref}`}</small></span></button>)}</div>)}
       {notebooks.length === 0 && <div className="empty screen-empty"><div className="empty-icon"><BookOpen size={23}/></div><h3>Chưa có notebook</h3><p>Đồng bộ tài khoản để tải danh sách notebook vào phiên làm việc.</p><button className="secondary" onClick={navigate}>Đến trang đồng bộ</button></div>}
       {notebooks.length > 0 && filtered.length === 0 && <div className="empty">Không tìm thấy notebook phù hợp.</div>}</div></section>
-      <section className="panel log-viewer"><div className="panel-heading"><div><h2>{selection?.title ?? "Trình xem logs"}</h2><p>{selection ? `${selection.account.label} · ${selection.ref}` : "Chọn một notebook từ danh sách."}</p></div>{selection && <button className="secondary" disabled={loading} onClick={() => void load(selection)}><RefreshCw size={15}/> Làm mới</button>}</div>
+      <section className="panel log-viewer"><div className="panel-heading"><div><h2>{selection?.title ?? "Trình xem logs"}</h2><p>{selection ? `${accountName(selection.account)} · ${selection.ref}` : "Chọn một notebook từ danh sách."}</p></div>{selection && <button className="secondary" disabled={loading} onClick={() => void load(selection)}><RefreshCw size={15}/> Làm mới</button>}</div>
       {selection && <div className="log-meta" aria-live="polite"><b>Trạng thái chạy: </b>{statusError ? statusError : runStatus ? `${STATUS_LABEL[runStatus.status] ?? runStatus.status}${runStatus.failure_message ? ` — ${runStatus.failure_message}` : ""}${ACTIVE.has(runStatus.status) ? " (tự cập nhật mỗi 10 giây)" : ""}` : "Đang tải..."}</div>}
       {runStatus?.run && <div className="log-meta rn-log-saved" role="status">Đã lưu kết quả run #{runStatus.run.id} vào Thí nghiệm</div>}
       {runStatus?.capture_error && <div className="log-meta rn-log-warn">{runStatus.capture_error}</div>}
