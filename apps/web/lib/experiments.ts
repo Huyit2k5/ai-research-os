@@ -14,7 +14,8 @@ let ready: Promise<unknown> | undefined;
 export function initExperiments() {
   ready ??= (async () => { await initialize(); await initPapers(); await db.query(`
     CREATE TABLE IF NOT EXISTS experiment_runs (id SERIAL PRIMARY KEY, owner_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE, account_id INTEGER REFERENCES compute_accounts(id) ON DELETE SET NULL, source TEXT NOT NULL DEFAULT 'kaggle', ref TEXT, version INTEGER, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'unknown', failure_message TEXT NOT NULL DEFAULT '', config JSONB NOT NULL DEFAULT '{}'::jsonb, metrics JSONB NOT NULL DEFAULT '{}'::jsonb, history JSONB NOT NULL DEFAULT '[]'::jsonb, env JSONB NOT NULL DEFAULT '{}'::jsonb, code TEXT, code_hash TEXT, captured_from TEXT NOT NULL DEFAULT 'none', notes TEXT NOT NULL DEFAULT '', tags TEXT[] NOT NULL DEFAULT '{}', paper_id INTEGER REFERENCES papers(id) ON DELETE SET NULL, run_at TIMESTAMPTZ, captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
-    CREATE UNIQUE INDEX IF NOT EXISTS experiment_runs_kaggle_idx ON experiment_runs(owner_id, account_id, ref, version) WHERE source='kaggle' AND version IS NOT NULL;
+    DROP INDEX IF EXISTS experiment_runs_kaggle_idx;
+    CREATE UNIQUE INDEX IF NOT EXISTS experiment_runs_kaggle_acct_idx ON experiment_runs(account_id, ref, version) WHERE source='kaggle' AND version IS NOT NULL;
     CREATE INDEX IF NOT EXISTS experiment_runs_owner_idx ON experiment_runs(owner_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS experiment_runs_tags_idx ON experiment_runs USING GIN (tags);
     -- Workspaces: runs are shared per workspace (a Kaggle run lives in its connection's workspace); owner_id is who captured/logged it.
@@ -114,10 +115,8 @@ export type CaptureResult = { skipped: true; reason: string } | { skipped: false
  * Captures the latest (or given) version of a Kaggle notebook into experiment_runs. Idempotent per (account, ref, version).
  * Never overwrites user-edited fields (name, notes, tags, paper_id); a re-capture that finds no data keeps the stored config/metrics.
  */
-export async function captureRun(s: Scope, account: { id: number; credential: string; workspace_id: string; owner_id?: unknown }, ref: string, opts: { version?: number; status?: string; failureMessage?: string; force?: boolean } = {}): Promise<CaptureResult> {
+export async function captureRun(s: Scope, account: { id: number; credential: string; workspace_id: string }, ref: string, opts: { version?: number; status?: string; failureMessage?: string; force?: boolean } = {}): Promise<CaptureResult> {
   await initExperiments();
-  // Callers already enforce this; only a connection's creator may use its token.
-  if (account.owner_id !== undefined && account.owner_id !== s.userId) throw new AppError(403, "Chỉ người tạo kết nối mới thu được run từ kết nối này.");
   if (!/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(ref)) throw new AppError(422, "Tên notebook không hợp lệ. Hãy dùng owner/notebook.");
   const ownerId = s.userId, workspaceId = account.workspace_id;
   if (!opts.force && (await db.query("SELECT 1 FROM experiment_runs WHERE account_id=$1 AND ref=$2 AND captured_at > NOW() - INTERVAL '2 minutes' LIMIT 1", [account.id, ref])).rows.length) return { skipped: true, reason: "Run vừa được thu cách đây chưa tới 2 phút." };
@@ -148,10 +147,10 @@ export async function captureRun(s: Scope, account: { id: number; credential: st
   const set = (x: string) => { const keep = (c: string) => `${c}=CASE WHEN ${x}.captured_from='none' THEN experiment_runs.${c} ELSE ${x}.${c} END`; return `status=CASE WHEN ${x}.status='unknown' THEN experiment_runs.status ELSE ${x}.status END, failure_message=CASE WHEN ${x}.status='unknown' THEN experiment_runs.failure_message ELSE ${x}.failure_message END, ${keep("config")}, ${keep("metrics")}, ${keep("history")}, ${keep("captured_from")}, env=${x}.env, workspace_id=COALESCE(experiment_runs.workspace_id, ${x}.workspace_id), code=COALESCE(${x}.code, experiment_runs.code), code_hash=COALESCE(${x}.code_hash, experiment_runs.code_hash), run_at=COALESCE(${x}.run_at, experiment_runs.run_at), captured_at=NOW()`; };
   const insert = "INSERT INTO experiment_runs (owner_id, account_id, source, ref, version, name, status, failure_message, config, metrics, history, env, code, code_hash, captured_from, run_at, workspace_id) VALUES ($1,$2,'kaggle',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)";
   // Without a version number the newest unversioned row for this notebook is updated in place.
-  const prev = version === null ? (await db.query("SELECT id FROM experiment_runs WHERE owner_id=$1 AND account_id=$2 AND ref=$3 AND source='kaggle' AND version IS NULL ORDER BY id DESC LIMIT 1", [ownerId, account.id, ref])).rows[0] : undefined;
-  if (!prev) await assertRoom(workspaceId, version === null ? undefined : { ownerId, accountId: account.id, ref, version });
+  const prev = version === null ? (await db.query("SELECT id FROM experiment_runs WHERE account_id=$1 AND ref=$2 AND source='kaggle' AND version IS NULL ORDER BY id DESC LIMIT 1", [account.id, ref])).rows[0] : undefined;
+  if (!prev) await assertRoom(workspaceId, version === null ? undefined : { accountId: account.id, ref, version });
   let row;
-  if (version !== null) row = (await db.query(`${insert} ON CONFLICT (owner_id, account_id, ref, version) WHERE source='kaggle' AND version IS NOT NULL DO UPDATE SET ${set("EXCLUDED")} RETURNING id, (xmax = 0) AS created`, vals)).rows[0];
+  if (version !== null) row = (await db.query(`${insert} ON CONFLICT (account_id, ref, version) WHERE source='kaggle' AND version IS NOT NULL DO UPDATE SET ${set("EXCLUDED")} RETURNING id, (xmax = 0) AS created`, vals)).rows[0];
   else {
     if (prev) { await db.query(`UPDATE experiment_runs SET ${set("x")} FROM (SELECT $2::text AS status, $3::text AS failure_message, $4::jsonb AS config, $5::jsonb AS metrics, $6::jsonb AS history, $7::jsonb AS env, $8::text AS code, $9::text AS code_hash, $10::text AS captured_from, $11::timestamptz AS run_at, $12::text AS workspace_id) x WHERE experiment_runs.id=$1`, [prev.id, ...vals.slice(5, 16)]); row = { id: prev.id, created: false }; }
     else row = { ...(await db.query(`${insert} RETURNING id`, vals)).rows[0], created: true };
@@ -159,19 +158,18 @@ export async function captureRun(s: Scope, account: { id: number; credential: st
   return { skipped: false, run: await getRun({ ...s, workspaceId }, row.id), created: Boolean(row.created) };
 }
 
-async function assertRoom(workspaceId: string, existing?: { ownerId: string; accountId: number; ref: string; version: number }) {
-  if (existing && (await db.query("SELECT 1 FROM experiment_runs WHERE owner_id=$1 AND account_id=$2 AND ref=$3 AND version=$4 AND source='kaggle'", [existing.ownerId, existing.accountId, existing.ref, existing.version])).rows.length) return;
+async function assertRoom(workspaceId: string, existing?: { accountId: number; ref: string; version: number }) {
+  if (existing && (await db.query("SELECT 1 FROM experiment_runs WHERE account_id=$1 AND ref=$2 AND version=$3 AND source='kaggle'", [existing.accountId, existing.ref, existing.version])).rows.length) return;
   if (Number((await db.query("SELECT COUNT(*) FROM experiment_runs WHERE workspace_id=$1", [workspaceId])).rows[0].count) >= MAX_RUNS) throw new AppError(409, `Workspace đã đạt giới hạn ${MAX_RUNS} run. Hãy xóa bớt run cũ.`);
 }
 
-/** Captures the latest run of a notebook given an account id string (used by REST + MCP). Only the connection's creator may capture. */
+/** Captures the latest run of a notebook given an account id string (used by REST + MCP). Any member of the connection's workspace may capture. */
 export async function captureRunFor(s: Scope, accountIdRaw: unknown, ref: unknown, opts: { version?: unknown; force?: boolean } = {}) {
   await initExperiments();
   const accountId = Number(accountIdRaw);
   if (!Number.isInteger(accountId) || accountId < 1 || accountId > 2147483647) throw new AppError(404, "Không tìm thấy kết nối.");
-  const account = (await db.query("SELECT id, credential, owner_id, workspace_id FROM compute_accounts WHERE id=$1 AND workspace_id=$2", [accountId, s.workspaceId])).rows[0];
+  const account = (await db.query("SELECT id, credential, workspace_id FROM compute_accounts WHERE id=$1 AND workspace_id=$2", [accountId, s.workspaceId])).rows[0];
   if (!account) throw new AppError(404, "Không tìm thấy kết nối.");
-  if (account.owner_id !== s.userId) throw new AppError(403, "Chỉ người tạo kết nối mới thu được run từ kết nối này.");
   const v = opts.version === undefined || opts.version === null || opts.version === "" ? undefined : Number(opts.version);
   if (v !== undefined && (!Number.isInteger(v) || v < 1)) throw new AppError(422, "Version không hợp lệ.");
   return captureRun(s, account, String(ref ?? ""), { version: v, force: opts.force });

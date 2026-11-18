@@ -147,7 +147,7 @@ function KvRows({ rows, setRows, keyHint, valueHint }: { rows: { k: string; v: s
 
 function CaptureModal({ accounts: all, data, onClose, onDone }: { accounts: Account[]; data: Record<number, SyncData>; onClose: () => void; onDone: (r: { run: Run; created: boolean }) => void }) {
   // Only a connection's creator may use its token, so only their own connections are offered.
-  const accounts = all.filter(a => a.mine);
+  const accounts = all;
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0), [ref, setRef] = useState(""), [version, setVersion] = useState(""), [busy, setBusy] = useState(false), [note, setNote] = useState(""), [err, setErr] = useState("");
   const notebooks = (data[accountId]?.notebooks ?? []).flatMap(n => { const r = typeof n.ref === "string" ? n.ref : ""; return REF.test(r) ? [{ ref: r, title: typeof n.title === "string" ? n.title : r }] : []; });
   async function submit(e: FormEvent) {
@@ -162,7 +162,7 @@ function CaptureModal({ accounts: all, data, onClose, onDone }: { accounts: Acco
   return <div className="overlay" onClick={onClose}><div className="modal rn-modal" role="dialog" aria-modal="true" aria-labelledby="rn-cap-title" onClick={e => e.stopPropagation()}>
     <div className="modal-top"><div><div className="eyebrow">THEO DÕI THÍ NGHIỆM</div><h2 id="rn-cap-title">Thu run từ Kaggle</h2></div><button className="icon-button" onClick={onClose} aria-label="Đóng"><X size={19} /></button></div>
     <p className="modal-description">Đọc ros_run.json hoặc dòng @@ROS trong log của phiên chạy đã xong. Thu lại cùng một version sẽ cập nhật run cũ, không tạo bản trùng.</p>
-    {accounts.length === 0 ? <p className="rn-muted">Bạn chưa có kết nối Kaggle nào trong workspace này. Chỉ người tạo kết nối mới thu được run từ kết nối đó; hãy thêm kết nối của bạn ở mục Tài khoản Kaggle trước.</p> : <form onSubmit={submit}>
+    {accounts.length === 0 ? <p className="rn-muted">Workspace này chưa có kết nối Kaggle nào. Hãy thêm kết nối ở mục Tài khoản Kaggle trước.</p> : <form onSubmit={submit}>
       <label>Tài khoản<select value={accountId} onChange={e => { setAccountId(Number(e.target.value)); setRef(""); }}>{accounts.map(a => <option key={a.id} value={a.id}>{a.label} (@{a.username})</option>)}</select></label>
       {notebooks.length ? <label>Notebook<select required value={ref} onChange={e => setRef(e.target.value)}><option value="">Chọn notebook…</option>{notebooks.map(n => <option key={n.ref} value={n.ref}>{n.title} · {n.ref}</option>)}</select></label>
         : <label>Notebook (owner/notebook)<input required value={ref} onChange={e => setRef(e.target.value)} placeholder="Ví dụ: researcher/vit-cifar10" /><small>Tài khoản này chưa có danh sách notebook. Đồng bộ ở mục Quota & tài nguyên để chọn từ danh sách.</small></label>}

@@ -158,10 +158,11 @@ assert.equal((await request(`/api/runs/${rBId}`, { method: "PATCH", cookie: b, b
 assert.ok(gone((await request(`/api/runs/${rB3.body.id}`, { method: "DELETE", cookie: b })).status)); ok("B can delete own run");
 assert.ok(gone((await request(`/api/runs/${rB2.body.id}`, { method: "DELETE", cookie: a })).status)); assert.equal((await request(`/api/runs/${rB2.body.id}`, { cookie: b })).status, 404); ok("A (owner) can delete B's run");
 
-// 6. Kaggle capture is creator-only
+// 6. Any member may capture through a workspace connection
 const acc = await request("/api/accounts", { method: "POST", cookie: a, body: { label: `share-iso ${stamp}`, username: "share-iso", token: "dummy-token" } });
 assert.equal(acc.status, 201);
-assert.equal((await request("/api/runs/capture", { method: "POST", cookie: b, body: { account_id: acc.body.id, ref: "share-iso/notebook" } })).status, 403); ok("B cannot capture through A's connection in the shared workspace (403)");
+const cap = await request("/api/runs/capture", { method: "POST", cookie: b, body: { account_id: acc.body.id, ref: "share-iso/notebook" } });
+assert.ok(![401, 403, 404].includes(cap.status), `B is allowed to capture through A's connection (Kaggle rejects the dummy token): ${cap.status}`); ok("B may capture through A's connection in the shared workspace (not blocked by ownership)");
 
 // 7. Tokens are bound to the workspace active when they were created
 const tShared = await request("/api/tokens", { method: "POST", cookie: b, body: { name: "share-iso shared" } });

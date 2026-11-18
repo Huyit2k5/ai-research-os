@@ -261,7 +261,7 @@ export default function PapersScreen() {
     {info && <div className="alert pl-info" role="status">{info}<button className="pl-alert-x" onClick={() => setInfo("")} aria-label="Đóng thông báo"><X size={14} /></button></div>}
 
     <section className="panel">
-      <div className="panel-heading"><div><h2>Tìm paper</h2><p>Nguồn: OpenAlex và arXiv, không cần API key.</p></div></div>
+      <div className="panel-heading"><div><h2>Tìm paper</h2><p>Nguồn: OpenAlex và arXiv.</p></div></div>
       <div className="pl-body">
         <form className="pl-form" onSubmit={e => { e.preventDefault(); void runSearch(1); }}><Search size={16} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Ví dụ: hard negative mining contrastive learning" aria-label="Từ khóa tìm paper" minLength={2} required /><button className="primary" disabled={searching}>{searching ? "Đang tìm..." : "Tìm kiếm"}</button></form>
         <div className="pl-toolbar pl-years">
@@ -303,12 +303,12 @@ export default function PapersScreen() {
     </section>}
 
     <div className="pl-split" id="pl-detail">
-      <section className="panel">
+      <section className="panel pl-list-panel">
         <div className="panel-heading"><div><h2>Đã lưu <span className="count">{total}</span></h2><p>{filtered ? `${total} paper khớp bộ lọc` : workspace ? `Thư viện chung của workspace “${workspace.name}”, mọi thành viên cùng xem và bổ sung.` : "Thư viện chung của workspace."}</p></div><div className="pl-head-actions"><button className="secondary pl-export" disabled={busy === "dups"} onClick={() => void findDups()} title="Tìm các bản trùng, ví dụ preprint và bản tạp chí"><GitMerge size={14} /> {busy === "dups" ? "Đang tìm..." : "Tìm trùng"}</button><a className="secondary pl-export" href={exportHref} download><Download size={14} /> {selected.size ? `BibTeX (${selected.size})` : "Xuất BibTeX"}</a></div></div>
         <div className="pl-body">
           <label className="pl-filter"><Search size={15} /><input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Lọc theo tiêu đề, tác giả, abstract" aria-label="Lọc paper đã lưu" /></label>
           <div className="pl-toolbar pl-grid2">
-            <label>Trạng thái của bạn<select value={status} onChange={e => setStatus(e.target.value)}><option value="">Tất cả</option>{(Object.keys(STATUS) as Status[]).map(s => <option key={s} value={s}>{STATUS[s]}</option>)}</select></label>
+            <label title="Trạng thái đọc của riêng bạn">Trạng thái<select aria-label="Trạng thái đọc của bạn" value={status} onChange={e => setStatus(e.target.value)}><option value="">Tất cả</option>{(Object.keys(STATUS) as Status[]).map(s => <option key={s} value={s}>{STATUS[s]}</option>)}</select></label>
             <label>Người đọc<select value={readers} onChange={e => setReaders(e.target.value)}><option value="">Tất cả</option><option value="none">Chưa ai đọc</option><option value="others">Người khác đã đọc, tôi chưa</option></select></label>
             <label>Tag<select value={tag} onChange={e => setTag(e.target.value)}><option value="">Tất cả</option>{tags.map(t => <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>)}</select></label>
             <label>Sắp xếp<select value={sort} onChange={e => setSort(e.target.value)}><option value="newest">Mới lưu</option><option value="year">Năm xuất bản</option><option value="title">Tên A–Z</option><option value="cited">Trích dẫn nhiều nhất</option></select></label>
