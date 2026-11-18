@@ -1,6 +1,7 @@
 import "server-only";
 import { AppError, db, decryptToken, kaggleCall, normalizeQuota } from "./server";
 import { initDocs } from "./documents";
+import { captureRun, TERMINAL } from "./experiments";
 import { rateLimit } from "./papers";
 import { buildSaveKernelBody, parseSettings, savedRef, validateCode, type PushSettings } from "./save-kernel";
 import { canManage, type Scope } from "./workspace";
@@ -158,4 +159,40 @@ export async function cancelRequest(s: Scope, idRaw: unknown): Promise<RunReques
   const r = await db.query("UPDATE run_requests SET status='cancelled', updated_at=NOW() WHERE id=$1 AND status='pending' RETURNING id", [cur.id]);
   if (!r.rows.length) throw new AppError(409, "Yêu cầu này không còn chờ duyệt.");
   return getRequest(s, cur.id);
+}
+
+const accountFor = async (s: Scope, accountId: number) => { const a = (await db.query("SELECT id, credential, workspace_id FROM compute_accounts WHERE id=$1 AND workspace_id=$2", [accountId, s.workspaceId])).rows[0]; if (!a) throw new AppError(404, "Không tìm thấy kết nối."); return a as { id: number; credential: string; workspace_id: string }; };
+
+/** Follows a `running` request: on a terminal Kaggle status it captures the run, finishes the request and links the run to the idea.
+ *  Kaggle reports the notebook's latest session, so a newer version pushed meanwhile is what gets followed (spec §7). */
+export async function refreshRequest(s: Scope, idRaw: unknown): Promise<RunRequest> {
+  const r = await getRequest(s, idRaw);
+  if (r.status !== "running" || !r.ref) return r;
+  const account = await accountFor(s, r.account_id), [userName, kernelSlug] = r.ref.split("/");
+  const st = await kaggleCall(decryptToken(account.credential), "GetKernelSessionStatus", { userName, kernelSlug });
+  const status = (typeof st.status === "string" ? st.status : "").replace(/^KERNEL_WORKER_STATUS_/, "").toLowerCase() || "unknown", failure = typeof st.failureMessage === "string" ? st.failureMessage : "";
+  if (!TERMINAL.has(status)) return r;
+  let runId: number | null = null, error = status === "complete" ? null : failure.slice(0, 2000) || `Kaggle kết thúc với trạng thái ${status}.`;
+  try {
+    const c = await captureRun(s, account, r.ref, { version: r.version ?? undefined, status, failureMessage: failure });
+    runId = c.skipped ? (await db.query("SELECT id FROM experiment_runs WHERE account_id=$1 AND ref=$2 AND source='kaggle' AND ($3::int IS NULL OR version=$3) ORDER BY id DESC LIMIT 1", [account.id, r.ref, r.version])).rows[0]?.id ?? null : c.run.id;
+  } catch (e) { error = `${error ? error + " · " : ""}Không thu được run: ${e instanceof Error ? e.message : "lỗi"}`; }
+  await db.query("UPDATE run_requests SET status=$2, error=$3, updated_at=NOW() WHERE id=$1 AND status='running'", [r.id, status === "complete" ? "done" : "failed", error]);
+  if (runId) await linkCapturedRun(s.workspaceId, account.id, r.ref, r.version, runId);
+  return getRequest(s, r.id);
+}
+
+/** Called after any capture (also from notebook-status): attaches the run to the matching pushed request and to its idea. */
+export async function linkCapturedRun(workspaceId: string, accountId: number, ref: string, version: number | null, runId: number) {
+  await initRunRequests();
+  const rows = (await db.query(`UPDATE run_requests SET run_id=$5, updated_at=NOW() WHERE id IN (SELECT id FROM run_requests WHERE workspace_id=$1 AND account_id=$2 AND ref=$3 AND status IN ('running','done','failed') AND (version=$4 OR ($4::int IS NULL AND status='running')) ORDER BY id DESC LIMIT 1) RETURNING idea_id`, [workspaceId, accountId, ref, version, runId])).rows;
+  for (const { idea_id } of rows) if (idea_id) await db.query("INSERT INTO document_runs (document_id, run_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [idea_id, runId]);
+}
+
+/** The code of the notebook's current Kaggle version, for the review diff (null for a new notebook). */
+export async function currentSource(s: Scope, idRaw: unknown): Promise<{ code: string | null }> {
+  const r = await getRequest(s, idRaw);
+  if (!r.ref) return { code: null };
+  const [userName, kernelSlug] = r.ref.split("/"), k = await kaggleCall(decryptToken((await accountFor(s, r.account_id)).credential), "GetKernel", { userName, kernelSlug });
+  return { code: isObj(k.blob) && typeof k.blob.source === "string" ? k.blob.source : null };
 }

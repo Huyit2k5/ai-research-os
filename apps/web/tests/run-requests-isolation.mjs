@@ -137,7 +137,23 @@ for (let i = 0; i < 9; i++) assert.equal((await request(`/api/run-requests/${req
 const limited = await request(`/api/run-requests/${req1}/approve`, { method: "POST", cookie: c });
 assert.equal(limited.status, 429, limited.text); ok("approve is rate-limited to 10 per minute per user");
 
-// @@STATUS@@
+// 8. Status and diff base
+const st = await request(`/api/run-requests/${toApprove}/status`, { bearer: tA, origin: null });
+assert.equal(st.status, 200, st.text); assert.equal(st.body.status, "pending"); ok("status of a pending request answers without calling Kaggle");
+assert.equal((await request(`/api/run-requests/${toApprove}/status`, { cookie: b })).status, 404); ok("another workspace cannot read the status");
+const baseNew = await request(`/api/run-requests/${fresh.body.id}/base`, { cookie: a });
+assert.equal(baseNew.status, 200); assert.equal(baseNew.body.code, null); ok("diff base of a new notebook is null (no Kaggle call)");
+const baseRef = await request(`/api/run-requests/${toApprove}/base`, { bearer: tA, origin: null });
+assert.equal(baseRef.status, 502, baseRef.text); assert.ok(!baseRef.text.includes("dummy-kaggle-token")); ok("diff base of an existing notebook asks Kaggle (502 with the dummy token, no leak)");
+assert.equal((await request(`/api/run-requests/${toApprove}/base`, { cookie: b })).status, 404); ok("another workspace cannot read the diff base");
+if (process.env.RUNREQ_TEST_DB) {
+  const client = new pg.Client({ connectionString: process.env.RUNREQ_TEST_DB }); await client.connect();
+  await client.query("UPDATE run_requests SET status='running', version=3 WHERE id=$1", [toApprove]);
+  const live = await request(`/api/run-requests/${toApprove}/status`, { cookie: a });
+  assert.equal(live.status, 502, live.text); ok("status of a running request asks Kaggle");
+  assert.equal((await client.query("SELECT status FROM run_requests WHERE id=$1", [toApprove])).rows[0].status, "running"); ok("a Kaggle error while following leaves the request running");
+  await client.query("UPDATE run_requests SET status='pending', version=NULL WHERE id=$1", [toApprove]); await client.end();
+} else console.log("  - running status skipped (set RUNREQ_TEST_DB)");
 
 // 9. Pending cap (keep last: it fills the workspace with 50 pending requests)
 const pendingNow = (await request("/api/run-requests?status=pending&limit=1", { cookie: a })).body.pending;
