@@ -10,7 +10,7 @@ export async function sendMail(to: string, subject: string, text: string, html: 
   await transport.sendMail({ from: process.env.MAIL_FROM, to, subject, text, html });
 }
 
-const esc = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export function resetPasswordMail(name: string, url: string) {
   const text = `Xin chào ${name},\n\nCó yêu cầu đặt lại mật khẩu tài khoản Research OS của bạn. Mở link sau trong vòng 1 giờ để đặt mật khẩu mới:\n\n${url}\n\nNếu bạn không yêu cầu, hãy bỏ qua email này; mật khẩu hiện tại vẫn giữ nguyên.`;
