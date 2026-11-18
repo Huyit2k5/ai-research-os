@@ -32,6 +32,8 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 - [x] Run thủ công (Colab, máy local), sửa tên/ghi chú/tag/paper liên kết, so sánh 2–10 run.
 - [x] Tool MCP cho run: `list_compute_accounts`, `list_runs`, `get_run`, `compare_runs`, `capture_run`, `log_run`, `update_run`, `delete_run`.
 - [ ] Kiểm chứng thu run với notebook Kaggle thật (file output, dòng log khi crash, môi trường và code từ GetKernel).
+- [x] Chạy notebook từ app có duyệt: AI đề xuất qua MCP `push_notebook`, thành viên duyệt trên web, app gửi `SaveKernel` (giữ dataset/GPU của version hiện tại), log trực tiếp, thu run và gắn vào ý tưởng; nút Chạy ở Notebooks và Chạy lại ở trang code run.
+- [ ] Kiểm chứng GPU (`machineShape` NvidiaTeslaT4) và trọn vòng duyệt → chạy → thu run với notebook thật.
 - [ ] Đồng bộ định kỳ, retry, giới hạn request và thông báo lỗi.
 - [ ] Kiểm thử end-to-end với Kaggle; sau đó thêm MLflow, biểu đồ và thông báo.
 

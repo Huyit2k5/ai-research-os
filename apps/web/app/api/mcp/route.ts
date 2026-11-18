@@ -106,7 +106,7 @@ export async function POST(req: Request) {
   if (!msg || typeof msg.method !== "string") return rpcError(null, -32600, "Invalid Request");
   if (msg.id === undefined) return new Response(null, { status: 202 }); // notifications
   switch (msg.method) {
-    case "initialize": return reply(msg.id, { protocolVersion: typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "research-os", version: "0.6.0" }, instructions: `Dữ liệu thuộc workspace "${scope.workspaceName}" và được dùng chung với các thành viên.` });
+    case "initialize": return reply(msg.id, { protocolVersion: typeof msg.params?.protocolVersion === "string" ? msg.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "research-os", version: "0.6.0" }, instructions: `Dữ liệu thuộc workspace "${scope.workspaceName}" và được dùng chung với các thành viên. push_notebook chỉ đề xuất chạy; một thành viên phải duyệt trên web trước khi tốn GPU.` });
     case "ping": return reply(msg.id, {});
     case "tools/list": return reply(msg.id, { tools: TOOLS });
     case "tools/call": {
