@@ -22,7 +22,7 @@ Khi khởi động, container chạy `scripts/migrate-auth.mjs` để tạo các
 
 Khi chạy lần đầu, chọn **Tạo tài khoản** để đăng ký bằng email và mật khẩu tối thiểu 12 ký tự. Tài khoản Research OS đầu tiên sẽ tiếp nhận các kết nối Kaggle được tạo trước khi có đăng nhập; hãy tự tạo tài khoản đầu tiên trên máy của bạn. Mỗi tài khoản có sẵn một workspace "Cá nhân". Đăng nhập Research OS độc lập với tài khoản Kaggle.
 
-Ứng dụng dùng Better Auth và lưu phiên trong PostgreSQL. Đăng ký hiện đang mở và chưa có xác minh email hoặc khôi phục mật khẩu. Bản này chỉ dành cho phát triển cục bộ; trước khi đưa lên mạng cần cấu hình HTTPS, `BETTER_AUTH_URL` đúng tên miền, xác minh email, khôi phục mật khẩu và các biện pháp bảo mật triển khai. Khóa phiên đăng nhập mặc định được dẫn xuất từ `CREDENTIAL_ENCRYPTION_KEY`; giữ nguyên khóa để các phiên còn hiệu lực sau khi khởi động lại.
+Ứng dụng dùng Better Auth và lưu phiên trong PostgreSQL. Đăng ký hiện đang mở và chưa có xác minh email. **Quên mật khẩu** gửi link đặt lại (hiệu lực 1 giờ, đặt xong thì đăng xuất mọi phiên) khi đặt `SMTP_URL` và `MAIL_FROM` (xem `.env.example`; với Gmail dùng App password). Không có SMTP thì quản trị viên dùng `node --env-file=.env.local scripts/reset-password.mjs <email>` trong `apps/web`. Bản này chỉ dành cho phát triển cục bộ; trước khi đưa lên mạng cần cấu hình HTTPS, `BETTER_AUTH_URL` đúng tên miền, xác minh email và các biện pháp bảo mật triển khai. Khóa phiên đăng nhập mặc định được dẫn xuất từ `CREDENTIAL_ENCRYPTION_KEY`; giữ nguyên khóa để các phiên còn hiệu lực sau khi khởi động lại.
 
 ## Workspace nhóm
 
@@ -76,6 +76,14 @@ Kiểm thử cách ly dữ liệu, token, MCP, thao tác hàng loạt, xuất Bi
 ## Theo dõi experiment
 
 Mỗi lần chạy notebook Kaggle được lưu thành một run gồm config, metrics, history theo step, trạng thái, môi trường và code. Thêm helper [`docs/ros_tracker.py`](docs/ros_tracker.py) vào notebook (utility script, dataset hoặc dán vào cell đầu) và gọi `log_config`, `log_metric`, `log_summary`, `finish`; helper ghi `/kaggle/working/ros_run.json` và in các dòng `@@ROS_CONFIG` / `@@ROS_METRIC` làm dự phòng. Run được thu khi màn hình Logs thấy notebook chạy xong, khi nhấn **Thu run từ Kaggle**, hoặc khi Claude gọi `capture_run`; chưa có tiến trình chạy nền. Run ở Colab hoặc máy local được ghi thủ công trên giao diện hoặc qua `log_run`. Có thể so sánh 2–10 run và dùng 8 tool MCP cho run. Hướng dẫn đầy đủ và giới hạn: [docs/EXPERIMENT_TRACKING.md](docs/EXPERIMENT_TRACKING.md). Chưa kiểm chứng với notebook thật.
+
+## Chạy notebook từ app (có duyệt)
+
+AI không tự tốn GPU: tool MCP `push_notebook` chỉ **đề xuất** một lần chạy (code, notebook đích hoặc notebook mới, máy T4×2/L4/TPU/CPU, ý tưởng liên quan). Yêu cầu hiện ở **Thí nghiệm → Chờ duyệt** (sidebar có số đếm). Thành viên mở **Xem code** (code, so sánh với version hiện tại trên Kaggle, log), rồi **Duyệt & chạy** hoặc **Từ chối** kèm ghi chú để AI sửa (`get_run_request` đọc được ghi chú). Chỉ duyệt được trên web, không có tool hay token nào duyệt được.
+
+Khi duyệt, app gửi code lên Kaggle bằng kết nối của workspace (`SaveKernel`, Save & Run All). Cấu hình không ghi rõ được giữ như version hiện tại, kể cả dataset (Kaggle xóa dataset nếu không gửi lại). Hết quota GPU thì không gửi. Đang chạy thì trang yêu cầu có log trực tiếp; chạy xong, run được thu vào Thí nghiệm và gắn vào ý tưởng (ý tưởng Mới chuyển sang Đang thử khi duyệt). Trạng thái chỉ cập nhật khi có người mở tab **Đang chạy**/trang yêu cầu, hoặc AI gọi `get_run_request`.
+
+Người cũng chạy trực tiếp được: nút **Chạy ▶** ở Notebooks (chạy lại code version hiện tại) và **Chạy lại version này** ở trang code của run. Yêu cầu chờ quá 7 ngày hết hạn; tối đa 50 yêu cầu chờ mỗi workspace.
 
 ## Tài liệu (ý tưởng, báo cáo, file)
 

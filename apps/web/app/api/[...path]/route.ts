@@ -1,6 +1,7 @@
 import { accountById, AppError, db, decryptToken, encryptToken, initialize, kaggleCall, normalizeQuota } from "../../../lib/server";
 import { captureRun, initExperiments, TERMINAL } from "../../../lib/experiments";
 import { sessionWorkspace } from "../../../lib/workspace";
+import { linkCapturedRun } from "../../../lib/run-requests";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,7 +116,7 @@ async function handler(req: Request, ctx: Context) {
       const raw = typeof result.status === "string" ? result.status : "", status = raw.replace(/^KERNEL_WORKER_STATUS_/, "").toLowerCase() || "unknown", failure_message = typeof result.failureMessage === "string" ? result.failureMessage : "";
       // A finished session is captured into experiment_runs automatically; capture errors never break the status response.
       let run: { id: number; created: boolean; captured_from: unknown } | null = null, capture_error = "";
-      if (TERMINAL.has(status)) { try { const c = await captureRun(scope, account,`${userName}/${kernelSlug}`, { status, failureMessage: failure_message }); if (!c.skipped) run = { id: c.run.id, created: c.created, captured_from: c.run.captured_from }; } catch (e) { capture_error = message(e).message; } }
+      if (TERMINAL.has(status)) { try { const c = await captureRun(scope, account,`${userName}/${kernelSlug}`, { status, failureMessage: failure_message }); if (!c.skipped) { run = { id: c.run.id, created: c.created, captured_from: c.run.captured_from }; await linkCapturedRun(scope.workspaceId, account.id, `${userName}/${kernelSlug}`, typeof c.run.version === "number" ? c.run.version : null, c.run.id); } } catch (e) { capture_error = message(e).message; } }
       return json({ status, failure_message, fetched_at: new Date().toISOString(), run, capture_error });
     }
     if (path[2] === "notebook-logs-stream" && method === "GET") return await streamLogs(req, decryptToken(account.credential), validateRef(req));

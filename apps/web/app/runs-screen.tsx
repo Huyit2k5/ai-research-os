@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type SetStateAction } from "react";
 import { ArrowUpDown, CloudDownload, Code2, Columns3, Copy, ExternalLink, GitCompareArrows, ImageDown, Maximize2, Minimize2, Pencil, Plus, Search, Tag, TestTubes, Trash2, Trophy, X } from "lucide-react";
 import type { Account, SyncData } from "./connector-screens";
+import RequestsPanel from "./run-requests-panel";
 
 type Scalar = string | number | boolean | null;
 type Run = { id: number; account_id: number | null; source: "kaggle" | "manual"; ref: string | null; version: number | null; name: string; status: string; failure_message: string; config: Record<string, Scalar>; metrics: Record<string, number>; env: Record<string, unknown>; captured_from: string; notes: string; tags: string[]; paper_id: number | null; run_at: string | null; captured_at: string; created_at: string; history_points: number; created_by?: string | null; can_delete?: boolean };
@@ -341,6 +342,9 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
   const [modal, setModal] = useState<"capture" | "manual" | null>(null);
   const [error, setError] = useState(""), [info, setInfo] = useState(""), [workspace, setWorkspace] = useState("");
   const reqId = useRef(0);
+  const [tab, setTab] = useState<"runs" | "pending" | "running">("runs"), [counts, setCounts] = useState({ pending: 0, running: 0 });
+  const loadCounts = useCallback(() => { Promise.all(["pending", "running"].map(s => fetch(`/api/run-requests?status=${s}&limit=1`, { cache: "no-store" }).then(r => r.ok ? r.json() : null))).then(([p, r]) => setCounts({ pending: p?.pending ?? 0, running: r?.total ?? 0 })).catch(() => {}); }, []);
+  useEffect(() => { loadCounts(); }, [loadCounts, tab]);
   useEffect(() => { call<{ name?: string }>("/api/workspace").then(w => setWorkspace(typeof w?.name === "string" ? w.name : "")).catch(() => {}); }, []);
 
   const qs = useCallback(() => new URLSearchParams({ q, source, status, tag, sort, ...(account ? { account } : {}), ...(sort === "metric" && metric ? { metric, order } : {}) }).toString(), [q, source, account, status, tag, sort, metric, order]);
@@ -411,7 +415,8 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
     <div className="heading screen-heading"><div><div className="eyebrow"><span /> THEO DÕI THÍ NGHIỆM</div><h1>Thí nghiệm</h1><p>{workspace && <>Run dùng chung trong workspace <b>{workspace}</b>. </>}Lưu config, metrics và đường học của từng lần chạy, rồi so sánh các run cạnh nhau để chọn hướng đi tiếp.</p></div>
       <div className="rn-head-actions"><button className="secondary" onClick={() => { setError(""); setModal("manual"); }}><Plus size={15} /> Thêm run thủ công</button><button className="primary" onClick={() => { setError(""); setModal("capture"); }}><CloudDownload size={16} /> Thu run từ Kaggle</button></div></div>
     {!open && alerts}
-
+    <div className="rq-tabs" role="tablist">{([["runs", "Run"], ["pending", `Chờ duyệt${counts.pending ? ` (${counts.pending})` : ""}`], ["running", `Đang chạy${counts.running ? ` (${counts.running})` : ""}`]] as const).map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{label}</button>)}</div>
+    {tab !== "runs" ? <RequestsPanel key={tab} status={tab} onChange={() => { loadCounts(); void reload(); }} /> : <>
     <section className="panel rn-toolbar-panel">
       <label className="rn-search"><Search size={15} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Tìm theo tên run, notebook hoặc ghi chú" aria-label="Tìm run" /></label>
       <div className="rn-toolbar">
@@ -466,6 +471,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
         {items.length < total && <button className="secondary rn-more" disabled={loading} onClick={() => void loadMore()}>{loading ? "Đang tải..." : `Tải thêm (${total - items.length} còn lại)`}</button>}
       </div>
     </section>}
+    </>}
 
     {open && <Drawer key={open.id} run={open} papers={papers} alerts={alerts} close={() => setOpen(null)} patch={patch} remove={() => void remove()} />}
     {modal === "capture" && <CaptureModal accounts={accounts} data={data} onClose={() => setModal(null)} onDone={r => { setModal(null); void reload(); void view(r.run.id); setInfo(r.created ? `Đã thu run #${r.run.id}: ${r.run.name}.` : `Đã cập nhật run #${r.run.id}: ${r.run.name}.`); }} />}
