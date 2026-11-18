@@ -42,6 +42,7 @@ export default function RequestsPanel({ status, onChange }: { status: "pending" 
           <button className="primary" disabled={busy === r.id} onClick={() => void act(r, "approve")}><Check size={15} /> {busy === r.id ? "Đang gửi..." : "Duyệt & chạy"}</button>
           <button className="secondary" disabled={busy === r.id} onClick={() => setRejecting(rejecting === r.id ? null : r.id)}><X size={15} /> Từ chối…</button>
         </div>}
+        {status === "running" && r.ref && <div className="rq-actions"><a className="secondary" href={`/run-requests/${r.id}`} target="_blank" rel="noreferrer">Xem log</a><a className="secondary rq-stop" href={`https://www.kaggle.com/code/${r.ref}`} target="_blank" rel="noreferrer" title="Kaggle chưa cho dừng phiên qua API: mở notebook trên Kaggle rồi bấm Cancel/Stop">Dừng chạy ↗</a></div>}
         {rejecting === r.id && <div className="rq-reject"><textarea maxLength={2000} value={note} onChange={e => setNote(e.target.value)} placeholder="Ghi chú cho AI (vì sao từ chối, cần sửa gì)" /><button className="primary" disabled={busy === r.id} onClick={() => void act(r, "reject", { note })}>Gửi từ chối</button></div>}
       </article>)}
   </section>;

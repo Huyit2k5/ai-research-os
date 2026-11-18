@@ -67,7 +67,7 @@ export default function LiveLog({ accountId, refName, version, active }: { accou
   useEffect(() => { if (active) void follow(accountId, refName); else { reset(); void load(); } return reset; }, [active, accountId, refName, follow, reset, load]);
   return <div className="rq-log">
     <div className="log-controls">{active
-      ? <><button className="secondary" onClick={stream.live ? stream.stop : () => void follow(accountId, refName)}>{stream.live ? "Dừng theo dõi" : "Theo dõi trực tiếp"}</button><span>{stream.status}{stream.trimmed ? " · chỉ giữ phần mới nhất" : ""}</span></>
+      ? <><button className="secondary" onClick={stream.live ? stream.stop : () => void follow(accountId, refName)}>{stream.live ? "Dừng theo dõi" : "Theo dõi trực tiếp"}</button><a className="secondary rq-stop" href={`https://www.kaggle.com/code/${refName}`} target="_blank" rel="noreferrer" title="Kaggle chưa cho dừng phiên qua API: mở notebook trên Kaggle rồi bấm Cancel/Stop">Dừng chạy ↗</a><span>{stream.status}{stream.trimmed ? " · chỉ giữ phần mới nhất" : ""}</span></>
       : <><button className="secondary" disabled={loading} onClick={() => void load()}>Làm mới</button><span>{loading ? "Đang tải logs..." : version ? `Logs của v${version}` : "Logs phiên gần nhất"}</span></>}</div>
     {error && <div className="alert error log-alert" role="alert">{error}</div>}
     <pre className="log-content">{active ? (stream.text || (stream.status ? "Đang chờ logs từ Kaggle..." : "")) : snapshot === null ? "" : snapshot ? formatLog(snapshot) : "Kaggle chưa trả về nội dung logs cho phiên này."}</pre>
