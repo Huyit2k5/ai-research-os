@@ -150,3 +150,7 @@ div.pl-by{margin:-2px 0 8px}
 .pl-readers-list{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .pl-readers-list li{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .pl-readers-list small{color:#7c8ea6}
+/* Narrow list column: let the heading wrap so the description and the action buttons stack */
+.pl-body{min-width:0}
+.pl-list-panel .panel-heading{flex-wrap:wrap;gap:10px}
+.pl-list-panel .panel-heading>div:first-child{flex:1 1 240px;min-width:0}

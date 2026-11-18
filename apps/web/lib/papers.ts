@@ -118,7 +118,12 @@ export async function savePaper(s: Scope, p: PaperInput, source: "manual" | "mcp
   }
 }
 
-// ---- Search: OpenAlex + arXiv (public, no key) ----
+// ---- Search: OpenAlex + arXiv ----
+/** Adds OpenAlex credentials: OPENALEX_API_KEY (free key; anonymous search is rate-limited on shared IPs such as Vercel) and optional OPENALEX_MAILTO. */
+function oaAuth(url: URL) {
+  if (process.env.OPENALEX_API_KEY) url.searchParams.set("api_key", process.env.OPENALEX_API_KEY);
+  if (process.env.OPENALEX_MAILTO) url.searchParams.set("mailto", process.env.OPENALEX_MAILTO);
+}
 async function getJson(url: string) {
   const res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(15000) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -145,7 +150,7 @@ async function searchOpenAlex(q: string, limit: number, o: SearchOpts): Promise<
   url.searchParams.set("search", q); url.searchParams.set("per-page", String(limit)); url.searchParams.set("page", String(o.page ?? 1));
   const f = [o.yearFrom && `from_publication_date:${o.yearFrom}-01-01`, o.yearTo && `to_publication_date:${o.yearTo}-12-31`].filter(Boolean);
   if (f.length) url.searchParams.set("filter", f.join(","));
-  if (process.env.OPENALEX_MAILTO) url.searchParams.set("mailto", process.env.OPENALEX_MAILTO);
+  oaAuth(url);
   const data = await getJson(url.toString());
   const works = Array.isArray(data.results) ? data.results as Record<string, any>[] : [];
   return works.flatMap(w => { const p = mapWork(w); return p ? [p] : []; });
@@ -178,7 +183,7 @@ export async function searchPapers(query: string, limit = 10, opts: SearchOpts =
   if (o.yearFrom && o.yearTo && o.yearFrom > o.yearTo) throw new AppError(422, "Năm bắt đầu phải nhỏ hơn hoặc bằng năm kết thúc.");
   const n = Math.min(Math.max(Math.floor(limit) || 10, 1), 25), errors: string[] = [];
   const [oa, ax] = await Promise.all([
-    searchOpenAlex(q, n, o).catch(() => { errors.push("OpenAlex không phản hồi."); return [] as PaperInput[]; }),
+    searchOpenAlex(q, n, o).catch((e: unknown) => { errors.push(e instanceof Error && e.message.includes("429") ? "OpenAlex đang giới hạn tìm kiếm ẩn danh nên chỉ có kết quả từ arXiv. Quản trị viên có thể đặt OPENALEX_API_KEY (miễn phí) để khắc phục." : "OpenAlex không phản hồi."); return [] as PaperInput[]; }),
     searchArxiv(q, n, o).catch(() => { errors.push("arXiv không phản hồi."); return [] as PaperInput[]; })]);
   const seen = new Set<string>(), out: PaperInput[] = [];
   for (const p of [...oa, ...ax]) {
@@ -212,7 +217,7 @@ export async function importPaper(raw: string): Promise<PaperInput> {
       return hit;
     }
     const url = new URL(`https://api.openalex.org/works/doi:${encodeURI(id.doi!)}`);
-    if (process.env.OPENALEX_MAILTO) url.searchParams.set("mailto", process.env.OPENALEX_MAILTO);
+    oaAuth(url);
     const res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(15000) });
     if (res.status === 404) throw new AppError(404, "Không tìm thấy paper với DOI này.");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -429,7 +434,7 @@ async function openAlexBatch(filterKey: "openalex" | "doi", values: string[]) {
   for (let i = 0; i < values.length; i += 50) {
     const url = new URL("https://api.openalex.org/works");
     url.searchParams.set("filter", `${filterKey}:${values.slice(i, i + 50).join("|")}`); url.searchParams.set("per-page", "50");
-    if (process.env.OPENALEX_MAILTO) url.searchParams.set("mailto", process.env.OPENALEX_MAILTO);
+    oaAuth(url);
     const data = await getJson(url.toString());
     if (Array.isArray(data.results)) out.push(...data.results as Record<string, any>[]);
   }
@@ -458,7 +463,7 @@ export async function refreshMetadata(s: Scope, idsRaw: unknown) {
   for (const p of rows.filter(p => !byId(p) && normTitle(p.title).length >= 12).slice(0, 10)) {
     try {
       const url = new URL("https://api.openalex.org/works"); url.searchParams.set("filter", `title.search:${p.title.replace(/[,|:]/g, " ")}`); url.searchParams.set("per-page", "5");
-      if (process.env.OPENALEX_MAILTO) url.searchParams.set("mailto", process.env.OPENALEX_MAILTO);
+      oaAuth(url);
       const data = await getJson(url.toString()), cands = Array.isArray(data.results) ? data.results as Record<string, any>[] : [];
       const hit = cands.filter(w => typeof w.title === "string" && normTitle(w.title) === normTitle(p.title) && (!p.year || !w.publication_year || Math.abs(w.publication_year - p.year) <= 1)).sort((x, y) => (y.cited_by_count ?? 0) - (x.cited_by_count ?? 0))[0];
       if (hit) works.push({ ...hit, __for: p.id });

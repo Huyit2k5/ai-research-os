@@ -50,7 +50,7 @@ Backend sử dụng Next.js; container không cài Python. Các lời gọi Kagg
 
 ## Thư viện paper và MCP
 
-Mở mục **Thư viện paper** để tìm paper trên OpenAlex và arXiv (không cần API key; lọc theo khoảng năm, tải thêm tới 10 trang), hoặc thêm trực tiếp bằng DOI / arXiv ID / URL. Paper được lưu theo từng tài khoản và tự loại trùng theo DOI, arXiv ID, OpenAlex ID, hoặc cùng tiêu đề và năm khi paper không có mã nào. Biến tùy chọn `OPENALEX_MAILTO` dùng một email chung cho OpenAlex; không đặt thì vẫn hoạt động.
+Mở mục **Thư viện paper** để tìm paper trên OpenAlex và arXiv (lọc theo khoảng năm, tải thêm tới 10 trang), hoặc thêm trực tiếp bằng DOI / arXiv ID / URL. Paper được lưu theo từng workspace và tự loại trùng theo DOI, arXiv ID, OpenAlex ID, hoặc cùng tiêu đề và năm khi paper không có mã nào. Biến tùy chọn `OPENALEX_API_KEY` (key miễn phí từ openalex.org) nên đặt khi triển khai trên máy chủ dùng chung như Vercel: OpenAlex giới hạn tìm kiếm ẩn danh theo IP nên nếu thiếu key, kết quả có thể chỉ còn từ arXiv (giao diện sẽ báo). `OPENALEX_MAILTO` là email tùy chọn cho OpenAlex; chạy cục bộ không cần đặt biến nào.
 
 Trong thư viện:
 - **Trạng thái đọc**: Cần đọc (mặc định) / Đang đọc / Đã đọc.
