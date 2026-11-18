@@ -83,9 +83,8 @@ async function handler(req: Request, ctx: Context) {
     }
     const account = await accountById(path[1], workspace.id), mine = account.owner_id === ownerId;
     if (path.length === 2 && method === "DELETE") { if (!mine && !["owner", "admin"].includes(workspace.role)) throw new AppError(403, "Chỉ người tạo kết nối hoặc quản trị workspace mới được xóa."); await db.query("DELETE FROM compute_accounts WHERE id=$1", [account.id]); return new Response(null, { status: 204 }); }
-    // Everything below uses or replaces the stored Kaggle token, which only its creator may do.
-    if (!mine) throw new AppError(403, "Chỉ người tạo kết nối mới được dùng token này.");
-    if (path[2] === "credential" && method === "PATCH") { const token = required((await payload(req)).token, "Token", 10000); return json((await db.query(`UPDATE compute_accounts SET credential=$1,verified=false,last_verified_at=NULL WHERE id=$2 RETURNING ${fields}`, [encryptToken(token), account.id])).rows[0]); }
+    // Any workspace member may use a connection (verify, sync, logs, run capture); the token itself is never returned. Replacing it is limited to the creator and workspace owner/admin.
+    if (path[2] === "credential" && method === "PATCH") { if (!mine && !["owner", "admin"].includes(workspace.role)) throw new AppError(403, "Chỉ người tạo kết nối hoặc quản trị workspace mới được đổi token."); const token = required((await payload(req)).token, "Token", 10000); return json((await db.query(`UPDATE compute_accounts SET credential=$1,verified=false,last_verified_at=NULL WHERE id=$2 RETURNING ${fields}`, [encryptToken(token), account.id])).rows[0]); }
     if (path[2] === "verify" && method === "POST") {
       let success = false; try { await kaggleCall(decryptToken(account.credential), "GetAcceleratorQuotaStatistics", {}); success = true; } finally { await db.query("UPDATE compute_accounts SET verified=$1,last_verified_at=NOW() WHERE id=$2", [success, account.id]); }
       return json((await db.query(`SELECT ${fields} FROM compute_accounts WHERE id=$1`, [account.id])).rows[0]);

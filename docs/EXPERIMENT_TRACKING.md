@@ -101,7 +101,7 @@ Có thể chạy `ros_tracker.py` ở Colab/local (đặt `ROS_OUTPUT_DIR` nếu
 
 Run thuộc về **workspace**, không thuộc riêng một người:
 - Mọi thành viên trong workspace đều xem, so sánh, đổi tên, ghi chú, gắn tag và liên kết paper cho run. Mỗi run hiện tên người đã tạo.
-- Run Kaggle nằm trong workspace của kết nối Kaggle đã dùng để thu. Chỉ **người tạo kết nối** mới thu được run từ kết nối đó, vì chỉ họ được dùng token.
+- Run Kaggle nằm trong workspace của kết nối Kaggle đã dùng để thu. Mọi thành viên workspace đều thu được run từ kết nối đó. Mỗi (kết nối, notebook, version) chỉ có một run, dù ai thu.
 - Chỉ người tạo run, hoặc owner/admin của workspace, mới xóa được run.
 - Paper liên kết với run phải nằm trong cùng workspace.
 - Token MCP gắn với workspace đang mở lúc tạo token. Muốn Claude làm việc ở workspace khác, hãy chuyển workspace trên web rồi tạo token mới.

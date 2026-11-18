@@ -28,7 +28,9 @@ Khi chạy lần đầu, chọn **Tạo tài khoản** để đăng ký bằng e
 
 Mở **Thành viên** để tạo workspace cho nhóm, chuyển workspace và mời thành viên. Owner hoặc admin nhập email người được mời, app tạo link mời (hết hạn sau 7 ngày); gửi link đó cho họ qua Zalo hoặc chat. Người nhận phải đăng nhập hoặc đăng ký **đúng email được mời** rồi mở link để tham gia.
 
-Thành viên trong workspace cùng thấy danh sách kết nối Kaggle và người tạo từng kết nối. Chỉ người tạo kết nối mới dùng được token của kết nối đó: đồng bộ, kiểm tra, lấy logs, theo dõi trực tiếp, đổi token. Kết quả đồng bộ chỉ người tạo kết nối xem được; logs không được lưu. Owner và admin được xóa kết nối của thành viên khác nhưng không dùng được token của họ.
+Thành viên trong workspace cùng thấy danh sách kết nối Kaggle và người tạo từng kết nối. Mọi thành viên đều dùng được kết nối của workspace: kiểm tra, đồng bộ, xem logs, theo dõi trực tiếp và thu run thí nghiệm. Token không bao giờ hiển thị lại, và chỉ người tạo kết nối hoặc owner/admin mới đổi được token hay ngắt kết nối. Kết quả đồng bộ được lưu và cả workspace cùng xem; logs không được lưu.
+
+**Lưu ý trước khi thêm token vào workspace chung:** mọi thành viên sẽ gọi Kaggle bằng danh tính và hạn mức của tài khoản đó (mỗi lần đồng bộ, xem logs hay thu run đều tính vào quota của chủ tài khoản). Chỉ thêm kết nối của tài khoản bạn sẵn sàng chia sẻ với cả nhóm, và đừng dùng để vượt hạn mức Kaggle.
 
 **Thư viện paper**, ghi chú và **run thí nghiệm** cũng dùng chung trong workspace:
 - Mọi thành viên xem, thêm và sửa được. Mỗi paper, ghi chú và run hiện tên người đã tạo.

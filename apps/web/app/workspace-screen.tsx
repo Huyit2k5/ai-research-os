@@ -41,7 +41,7 @@ export default function WorkspaceScreen({ workspace, userId }: { workspace: Work
   const pending = full?.invitations.filter(item => item.status === "pending") ?? [];
 
   return <>
-    <div className="heading screen-heading"><div><div className="eyebrow"><span /> WORKSPACE</div><h1>{workspace.name}</h1><p>Thành viên cùng thấy danh sách kết nối Kaggle của workspace. Chỉ người tạo kết nối mới dùng được token của kết nối đó.</p></div></div>
+    <div className="heading screen-heading"><div><div className="eyebrow"><span /> WORKSPACE</div><h1>{workspace.name}</h1><p>Thành viên cùng thấy danh sách kết nối Kaggle của workspace. Mọi thành viên đều dùng được kết nối để đồng bộ, xem logs và thu run; token không bao giờ hiển thị, và chỉ người tạo hoặc quản trị mới đổi được.</p></div></div>
     {error && <div className="alert error" role="alert">{error}<button onClick={() => setError("")} aria-label="Đóng"><X size={16} /></button></div>}
     {notice && <div className="alert success"><Check size={17} />{notice}<button onClick={() => setNotice("")} aria-label="Đóng"><X size={16} /></button></div>}
     <section className="panel ws-panel"><div className="panel-heading"><div><h2>Thành viên <span className="count">{full?.members.length ?? "—"}</span></h2><p>Vai trò của bạn: {roles[workspace.role] ?? workspace.role}</p></div></div>

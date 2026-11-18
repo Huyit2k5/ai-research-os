@@ -41,14 +41,21 @@ const shared = (await request("/api/accounts", { cookie: second.cookie })).body;
 assert.equal(shared.length, 2);
 assert.ok(shared.every(account => account.mine === false && account.can_delete === false && account.creator === "First"));
 const target = shared[0].id, ref = "ref=owner%2Fnotebook";
-for (const [path, method, body] of [[`/api/accounts/${target}/sync`, "POST"], [`/api/accounts/${target}/verify`, "POST"], [`/api/accounts/${target}/credential`, "PATCH", { token: "stolen" }], [`/api/accounts/${target}/notebook-logs?${ref}`, "GET"], [`/api/accounts/${target}/notebook-logs-stream?${ref}`, "GET"], [`/api/accounts/${target}`, "DELETE"]])
+// A member cannot replace someone else's token or delete their connection...
+for (const [path, method, body] of [[`/api/accounts/${target}/credential`, "PATCH", { token: "stolen" }], [`/api/accounts/${target}`, "DELETE"]])
   assert.equal((await request(path, { method, cookie: second.cookie, body })).status, 403, `${method} ${path}`);
-// The workspace owner may delete a member's connection without being able to use its token.
+// ...but may use it: authorised requests are not 401/403/404 (Kaggle itself rejects the dummy token, so 200 or 502 is expected).
+for (const [path, method] of [[`/api/accounts/${target}/sync`, "POST"], [`/api/accounts/${target}/verify`, "POST"], [`/api/accounts/${target}/notebook-logs?${ref}`, "GET"], [`/api/accounts/${target}/notebook-logs-stream?${ref}`, "GET"]]) {
+  const status = (await request(path, { method, cookie: second.cookie })).status;
+  assert.ok(![401, 403, 404].includes(status), `member may use the connection: ${method} ${path} -> ${status}`);
+}
+// The workspace owner may use, replace the token of, and delete a member's connection.
 const memberAccount = await request("/api/accounts", { method: "POST", cookie: second.cookie, body: { label: "member", username: "member", token: "member-token" } });
 assert.equal(memberAccount.status, 201);
 const ownerView = (await request("/api/accounts", { cookie: login.cookie })).body.find(account => account.id === memberAccount.body.id);
 assert.equal(ownerView.mine, false); assert.equal(ownerView.can_delete, true); assert.equal(ownerView.creator, "Second");
-assert.equal((await request(`/api/accounts/${memberAccount.body.id}/sync`, { method: "POST", cookie: login.cookie })).status, 403);
+assert.notEqual((await request(`/api/accounts/${memberAccount.body.id}/sync`, { method: "POST", cookie: login.cookie })).status, 403);
+assert.equal((await request(`/api/accounts/${memberAccount.body.id}/credential`, { method: "PATCH", cookie: login.cookie, body: { token: "rotated-by-owner" } })).status, 200);
 assert.equal((await request(`/api/accounts/${memberAccount.body.id}`, { method: "DELETE", cookie: login.cookie })).status, 204);
 // A removed member falls back to their own workspace and loses access.
 assert.equal((await request("/api/auth/organization/remove-member", { method: "POST", cookie: login.cookie, body: { memberIdOrEmail: users[1].email, organizationId: workspace.id } })).status, 200);
