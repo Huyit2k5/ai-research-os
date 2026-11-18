@@ -27,7 +27,7 @@ Ai trong workspace cũng mở một link là xem được, không phải gửi f
 - Upload và xem HTML, PDF, Word (.docx) và ảnh. Luôn tải được file gốc.
 - Mỗi tài liệu liên kết được tới paper và run trong cùng workspace (chuỗi ý tưởng → paper → run → kết quả).
 - Ý tưởng có trạng thái **Mới → Đang thử → Đã chọn / Bỏ**.
-- Kho file dùng **giao thức S3**: chạy trên Supabase Storage bây giờ, sau này chuyển sang Cloudflare R2 hoặc dịch vụ S3 bất kỳ **chỉ bằng đổi biến môi trường**.
+- Kho file là **Cloudflare R2**, truy cập qua **giao thức S3**, nên đổi sang dịch vụ S3 khác (AWS S3, MinIO, Supabase Storage…) **chỉ bằng đổi biến môi trường**.
 
 **Không làm trong đợt này**
 - App tự gọi LLM, hoặc bộ chạy nền và lập lịch trong app. Việc tự động do agent bên ngoài gọi MCP; đây là hướng (a) người dùng đã chọn.
@@ -51,7 +51,7 @@ Ai trong workspace cũng mở một link là xem được, không phải gửi f
 - Có giới hạn tần suất sẵn: `rateLimit()`, lưu trong Postgres.
 - MCP: thêm tool vào mảng `TOOLS` và `switch` trong `app/api/mcp/route.ts`. Mô tả tool bằng tiếng Việt, gắn `readOnlyHint` hoặc `destructiveHint` như các tool hiện có.
 - Toàn bộ chữ trên giao diện bằng tiếng Việt. Code viết dày đặc như các file hiện có.
-- Gói miễn phí của Supabase: database 500 MB, Storage 1 GB.
+- Gói miễn phí: database Supabase 500 MB. **R2: 10 GB lưu trữ, không tính phí băng thông tải xuống**; Cloudflare yêu cầu thêm thẻ thanh toán để bật R2.
 
 ## 4. Các cách đã cân nhắc
 
@@ -59,8 +59,9 @@ Ai trong workspace cũng mở một link là xem được, không phải gửi f
 |---|---|---|
 | Lưu file trong Postgres (bytea) | Không cần dịch vụ mới, nhưng chiếm 500 MB chung của database; file lớn đi qua kết nối DB chậm | Loại |
 | Lưu trên ổ đĩa hoặc Docker volume | File chỉ ở máy người upload; nhóm dùng chung DB nhưng không chung ổ đĩa | Loại |
-| **Supabase Storage qua giao thức S3** | Thêm 5 biến môi trường và tạo bucket một lần; khóa S3 chỉ có quyền với Storage; chuyển sang R2 không sửa code | **Người dùng chọn** |
-| Supabase Storage qua API riêng của Supabase (khóa `service_role`) | Khóa vượt qua mọi RLS của DB; khóa chặt vào Supabase | Loại, vì người dùng muốn chuyển được sang R2/S3 |
+| Supabase Storage qua giao thức S3 | 1 GB miễn phí; chưa chắc hỗ trợ đủ link ký sẵn và CORS | Từng được chọn, sau đó **thay bằng R2** (2026-11-18) |
+| Supabase Storage qua API riêng của Supabase (khóa `service_role`) | Khóa vượt qua mọi RLS của DB; khóa chặt vào Supabase | Loại |
+| **Cloudflare R2 qua giao thức S3** | 10 GB miễn phí, không phí tải xuống; hỗ trợ chắc chắn link ký sẵn, `response-content-*` và CORS; cần thẻ thanh toán | **Người dùng chọn** |
 
 ## 5. Thiết kế
 
@@ -84,13 +85,12 @@ Ai trong workspace cũng mở một link là xem được, không phải gửi f
   - `presignGet(key, { fileName, contentType, inline })`: link GET ký sẵn, hạn 5 phút. Dùng `response-content-type` và `response-content-disposition` để kho file trả đúng header.
   - `headObject(key)`: lấy dung lượng và loại thật sau khi upload.
   - `deleteObject(key)`.
-- Đường dẫn dạng path-style (`{endpoint}/{bucket}/{key}`), chạy được với Supabase Storage, R2 và MinIO.
+- Đường dẫn dạng path-style (`{endpoint}/{bucket}/{key}`), chạy được với R2 (`https://<account_id>.r2.cloudflarestorage.com`, region `auto`), AWS S3 và MinIO (dùng khi test).
 - Biến môi trường: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`. Thiếu biến nào thì chức năng upload báo lỗi rõ ràng bằng tiếng Việt; phần tài liệu dạng văn bản vẫn chạy bình thường.
 - Khóa object có dạng `ws/<workspace_id>/<uuid>`, **không dùng tên file của người dùng**. Bucket để riêng tư; chỉ app cấp được link ký sẵn, và chỉ sau khi đã kiểm tra workspace.
 - Bucket cần **CORS** cho tên miền của app (local và Vercel), cho phép `PUT` và `GET`. README hướng dẫn cấu hình.
 - Xóa tài liệu: xóa dòng trong DB trước, rồi xóa object. Nếu xóa object lỗi thì chỉ ghi log, không chặn người dùng; file mồ côi chấp nhận được.
-- **Rủi ro chưa kiểm chứng; đây là việc đầu tiên của kế hoạch:** cổng S3 của Supabase có hỗ trợ link ký sẵn (PUT/GET, kể cả `response-content-*`) và CORS từ trình duyệt không.
-  - Nếu thiếu, phương án dự phòng là cài `lib/storage.ts` bằng API "signed upload URL" và "signed URL" riêng của Supabase, giữ nguyên các hàm trên. Code ngoài `lib/storage.ts` không đổi; khi chuyển sang R2 thì quay về cài đặt S3.
+- Khóa API của R2 phải giới hạn **chỉ một bucket**, quyền Object Read & Write.
 
 ### 5.3 API (REST, dưới `app/api/docs/**`)
 
@@ -111,7 +111,7 @@ Quyền:
 
 Giới hạn:
 - **25 MB mỗi file.**
-- **Tổng dung lượng file tính cho cả project,** không theo workspace, vì 1 GB miễn phí của Storage là của cả project Supabase và mỗi người dùng tự có một workspace "Cá nhân". Mức mặc định 900 MB, đổi được qua biến `STORAGE_LIMIT_MB` để nâng khi chuyển sang R2/S3. Khi cấp link upload, cộng `file_size` của mọi tài liệu (kể cả dòng đang chờ) với file mới — *quyết định của người làm*.
+- **Tổng dung lượng file tính cho cả project,** không theo workspace, vì dung lượng miễn phí của R2 là của cả tài khoản Cloudflare và mỗi người dùng tự có một workspace "Cá nhân". Mức mặc định **9000 MB**, chừa khoảng trống dưới 10 GB miễn phí của R2; đổi được qua biến `STORAGE_LIMIT_MB`. Khi cấp link upload, cộng `file_size` của mọi tài liệu (kể cả dòng đang chờ) với file mới — *quyết định của người làm*.
 - **5000 tài liệu mỗi workspace.**
 - Upload tối đa 30 lần mỗi phút cho mỗi người.
 
@@ -154,7 +154,7 @@ Giới hạn:
 
 ### 5.7 Kiểm thử
 
-- `tests/docs-isolation.mjs`, theo mẫu của `runs-isolation.mjs` và `papers-isolation.mjs`, chạy trên database tạm. Kho file test dùng **MinIO** trong Docker, bật CORS; nó cũng là bằng chứng code chạy được với kho S3 khác Supabase. Test đi trọn luồng cấp link, PUT, complete. Các trường hợp:
+- `tests/docs-isolation.mjs`, theo mẫu của `runs-isolation.mjs` và `papers-isolation.mjs`, chạy trên database tạm. Kho file test dùng **MinIO** trong Docker, bật CORS; nó cũng là bằng chứng code chạy được với kho S3 khác R2. Test đi trọn luồng cấp link, PUT, complete. Các trường hợp:
   - Cách ly theo workspace: người ngoài không đọc, sửa hay xóa được, kể cả `/file`.
   - Quyền xóa (`canManage`).
   - `/file` chuyển hướng tới link ký sẵn với `inline` hoặc `attachment` đúng theo loại file; người ngoài nhận 404.

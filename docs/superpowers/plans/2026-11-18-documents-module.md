@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a workspace-shared documents module (ideas, reports, other). Documents are written by AI over MCP/REST or uploaded by people (HTML, PDF, Word, images), linked to papers and runs, and stored in S3-compatible object storage that works on Vercel.
+**Goal:** Build a workspace-shared documents module (ideas, reports, other). Documents are written by AI over MCP/REST or uploaded by people (HTML, PDF, Word, images), linked to papers and runs, and stored in Cloudflare R2 (S3 API) in a way that works on Vercel.
 
 **Architecture:**
 - Document rows live in Supabase Postgres (`documents`, `document_papers`, `document_runs`), created lazily in `lib/documents.ts` with RLS.
-- File bytes never pass through the app. The browser PUTs to a presigned URL, and viewing redirects to a presigned GET. Both URLs come from `lib/storage.ts`, which speaks the S3 protocol via `aws4fetch`, so Supabase Storage, R2 and MinIO are interchangeable by env vars.
+- File bytes never pass through the app. The browser PUTs to a presigned URL, and viewing redirects to a presigned GET. Both URLs come from `lib/storage.ts`, which speaks the S3 protocol via `aws4fetch`, so R2, AWS S3 and MinIO (tests) are interchangeable by env vars.
 - REST under `app/api/docs/**`, MCP tools in `app/api/mcp/route.ts`, a list screen in the SPA, and a full-page viewer at `/docs/[id]`.
 
 **Tech Stack:** Next.js 16 / React 19, `pg`, Better Auth workspaces (existing), `aws4fetch` (new), `mammoth` (new, browser-only, dynamic import), MinIO for tests.
@@ -24,7 +24,7 @@
   - Title ≤ 300 characters.
   - ≤ 20 tags.
   - 5000 documents per workspace.
-  - Total stored file bytes across the whole project ≤ `STORAGE_LIMIT_MB` (default 900).
+  - Total stored file bytes across the whole project ≤ `STORAGE_LIMIT_MB` (default 9000, under R2's 10 GB free tier).
   - Uploads: 30 per minute per user (`rateLimit`).
 - `kind` ∈ `idea | report | other`. `status` (ideas only) ∈ `new | trying | chosen | dropped`. `format` ∈ `markdown | html | file`. `upload_state` ∈ `pending | ready`.
 - Object keys are `ws/<workspace_id>/<uuid>`; never the user's filename. The bucket is private.
@@ -32,7 +32,7 @@
 - Only `application/pdf`, `image/png|jpeg|gif|webp` and `text/html` are served `inline`. Everything else, including SVG and .docx, is `attachment`.
 - HTML is rendered only in `<iframe sandbox="">`, with no `allow-scripts` and no `allow-same-origin`. PDFs go in a plain iframe.
 - Env vars: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `STORAGE_LIMIT_MB`. If any S3 var is missing, uploads fail with a Vietnamese error while text docs keep working.
-- Tests run only against a disposable Postgres and MinIO, never the shared Supabase.
+- Tests run only against a disposable Postgres and MinIO, never the shared Supabase or the real R2 bucket.
 
 ## Review Focus
 
@@ -44,17 +44,17 @@
 
 ---
 
-### Task 0: Storage setup on Supabase (human, with the user)
+### Task 0: R2 setup (human, with the user)
 
-**Files:** none (dashboard).
+**Files:** none (Cloudflare dashboard).
 
-- [ ] **Step 1: Create the storage on Supabase.** In the Supabase dashboard:
-  - Storage → create a **private** bucket `research-docs`.
-  - Settings → Storage → **enable the S3 protocol** and create an **S3 access key**.
-  - Copy the endpoint (`https://<ref>.storage.supabase.co/storage/v1/s3`) and the region.
-- [ ] **Step 2: Fill the env vars.** Put the 5 `S3_*` vars into the root `.env` and `apps/web/.env.local`, and into the Vercel project env (Production + Preview).
+- [ ] **Step 1: Create the bucket and key.** In the Cloudflare dashboard → R2 (adding a payment method is required to enable R2, even on the free tier):
+  - Create the bucket `research-docs`.
+  - Create an **R2 API token** with **Object Read & Write**, **scoped to that bucket only**. Copy the Access Key ID, the Secret Access Key and the S3 endpoint `https://<account_id>.r2.cloudflarestorage.com`.
+- [ ] **Step 2: Add the bucket CORS policy.** Bucket → Settings → CORS policy: `AllowedOrigins` = `http://localhost:3001` and the Vercel production + preview URLs; `AllowedMethods` = `GET`, `PUT`; `AllowedHeaders` = `content-type`, `content-length`; `ExposeHeaders` = `content-type`, `content-disposition`, `content-length`; `MaxAgeSeconds` = 3600.
+- [ ] **Step 3: Fill the env vars.** `S3_ENDPOINT`, `S3_REGION=auto`, `S3_BUCKET=research-docs`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` go into the root `.env`, `apps/web/.env.local` and the Vercel project env (Production + Preview).
 
-### Task 1: Provider capability check (spike gate)
+### Task 1: Storage capability check
 
 **Files:**
 - Create: `apps/web/scripts/storage-check.mjs`
@@ -71,7 +71,7 @@
   5. A CORS preflight (`OPTIONS` with `Origin` and `Access-Control-Request-Method: PUT`) is allowed for `--origin`.
   6. DELETE works.
 - [ ] **Step 2: Run it against MinIO.** Command: `docker run -d --name ros-minio -p 127.0.0.1:59000:9000 -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio-secret-123 minio/minio server /data`. Create the bucket with a signed `PUT /<bucket>`. Expected: all 6 ✓.
-- [ ] **Step 3: Run it against Supabase**, with the Task 0 env, for `--origin http://localhost:3001` and for the Vercel URL. Expected: all ✓. **If 4 or 5 fail**, stop and report to the user. The spec's fallback is a Supabase signed-URL implementation behind the same `lib/storage.ts` interface; get the user's go-ahead before taking it.
+- [ ] **Step 3: Run it against R2**, with the Task 0 env, for `--origin http://localhost:3001` and for the Vercel URL. Expected: all ✓. If check 5 (CORS) fails, the Task 0 CORS policy is missing that origin; fix it in the dashboard, not in code.
 - [ ] **Step 4: Commit:** `git add apps/web/scripts/storage-check.mjs apps/web/package.json apps/web/package-lock.json && git commit -m "Add S3 storage capability check"`
 
 ### Task 2: Text documents, links and REST
