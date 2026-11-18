@@ -108,7 +108,36 @@ if (process.env.RUNREQ_TEST_DB) {
   assert.ok((await request("/api/run-requests?status=expired", { cookie: a })).body.items.some(r => r.id === old)); ok("a pending request older than 7 days becomes expired");
 } else console.log("  - expiry skipped (set RUNREQ_TEST_DB)");
 
-// @@APPROVE@@
+// 7. Approve and run-now (the dummy Kaggle token makes every push fail at Kaggle, after all checks)
+const toApprove = (await make(tA, { idea_id: idea.id })).body.id;
+assert.equal((await request(`/api/run-requests/${toApprove}/approve`, { method: "POST", bearer: tA, origin: null })).status, 401); ok("a token cannot approve");
+assert.equal((await request("/api/run-requests/run-now", { method: "POST", bearer: tA, origin: null, body: { account_id: accountA, ref: "runreq/lora-exp" } })).status, 401); ok("a token cannot run-now");
+assert.equal((await request(`/api/run-requests/${toApprove}`, { cookie: a })).body.status, "pending"); ok("the request is still pending after token attempts");
+assert.equal((await request(`/api/run-requests/${toApprove}/approve`, { method: "POST", cookie: a, origin: "https://evil.example" })).status, 403); ok("cross-origin approve is rejected");
+assert.equal((await request(`/api/run-requests/${toApprove}/approve`, { method: "POST", cookie: b })).status, 404); ok("another workspace cannot approve");
+const tried = await request(`/api/run-requests/${toApprove}/approve`, { method: "POST", cookie: a });
+assert.equal(tried.status, 502, tried.text); assert.ok(!tried.text.includes("dummy-kaggle-token")); ok("approve reaches Kaggle (502 with the dummy token) and does not leak the token");
+const afterTry = (await request(`/api/run-requests/${toApprove}`, { cookie: a })).body;
+assert.equal(afterTry.status, "pending"); assert.ok(afterTry.error && afterTry.error.length > 0); assert.equal(afterTry.version, null); ok("a failed push returns the request to pending with the error");
+assert.equal((await request(`/api/docs/${idea.id}`, { cookie: a })).body.status, "new"); ok("a failed push leaves the idea status alone");
+const race = (await make(tA)).body.id;
+const both = await Promise.all([request(`/api/run-requests/${race}/approve`, { method: "POST", cookie: a }), request(`/api/run-requests/${race}/approve`, { method: "POST", cookie: c })]);
+assert.deepEqual(both.map(r => r.status).sort(), [409, 502], both.map(r => r.text).join(" | ")); ok("two reviewers approving at once: one push, one 409");
+assert.equal((await request(`/api/run-requests/${req1}/approve`, { method: "POST", cookie: a })).status, 409); ok("a rejected request cannot be approved");
+const manual = await request("/api/runs", { method: "POST", cookie: a, body: { name: `manual ${stamp}` } });
+assert.equal(manual.status, 201, manual.text);
+const noCode = await request("/api/run-requests/run-now", { method: "POST", cookie: a, body: { run_id: manual.body.id } });
+assert.equal(noCode.status, 422, noCode.text); ok("run-now of a run without stored code is 422");
+const now = await request("/api/run-requests/run-now", { method: "POST", cookie: a, body: { account_id: accountA, ref: "runreq/lora-exp", machine: "cpu" } });
+assert.equal(now.status, 502, now.text); ok("run-now reaches Kaggle (502 with the dummy token)");
+const nowRow = (await request("/api/run-requests?limit=1", { cookie: a })).body.items[0];
+assert.equal(nowRow.requested_via, "web"); assert.equal(nowRow.status, "pending"); assert.ok(nowRow.error); ok("run-now records a web request that stays pending with the error");
+// C used 1 approve in the race above; 9 more reach 10 in the minute, the next one is refused.
+for (let i = 0; i < 9; i++) assert.equal((await request(`/api/run-requests/${req1}/approve`, { method: "POST", cookie: c })).status, 409);
+const limited = await request(`/api/run-requests/${req1}/approve`, { method: "POST", cookie: c });
+assert.equal(limited.status, 429, limited.text); ok("approve is rate-limited to 10 per minute per user");
+
+// @@STATUS@@
 
 // 9. Pending cap (keep last: it fills the workspace with 50 pending requests)
 const pendingNow = (await request("/api/run-requests?status=pending&limit=1", { cookie: a })).body.pending;

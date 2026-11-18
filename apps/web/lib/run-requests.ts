@@ -1,8 +1,8 @@
 import "server-only";
-import { AppError, db } from "./server";
+import { AppError, db, decryptToken, kaggleCall, normalizeQuota } from "./server";
 import { initDocs } from "./documents";
 import { rateLimit } from "./papers";
-import { parseSettings, validateCode, type PushSettings } from "./save-kernel";
+import { buildSaveKernelBody, parseSettings, savedRef, validateCode, type PushSettings } from "./save-kernel";
 import { canManage, type Scope } from "./workspace";
 
 let ready: Promise<unknown> | undefined;
@@ -47,13 +47,22 @@ export async function listRequests(s: Scope, o: { status?: string; idea_id?: num
 /** Validates everything a later push needs, so a bad request fails here and not at Kaggle. */
 export async function createRequest(s: Scope, via: "mcp" | "api" | "web", f: Record<string, unknown>): Promise<RunRequest> {
   await initRunRequests();
+  const v = await validated(s, f, false);
+  await rateLimit(s.userId, "run-request", 30, 3600);
+  if (Number((await db.query("SELECT COUNT(*) FROM run_requests WHERE workspace_id=$1 AND status='pending'", [s.workspaceId])).rows[0].count) >= MAX_PENDING) throw new AppError(429, `Workspace đã có ${MAX_PENDING} yêu cầu chờ duyệt. Hãy duyệt, từ chối hoặc hủy bớt.`);
+  const id = (await db.query("INSERT INTO run_requests (workspace_id, account_id, ref, new_title, kernel_type, code, settings, summary, idea_id, requested_by, requested_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id", [s.workspaceId, v.accountId, v.ref, v.newTitle, v.kernelType, v.code, JSON.stringify(v.settings), v.summary, v.ideaId, s.userId, via])).rows[0].id;
+  return getRequest(s, id);
+}
+
+/** codeFromKaggle: run-now on an existing notebook leaves code empty; push() fills it from GetKernel. */
+async function validated(s: Scope, f: Record<string, unknown>, codeFromKaggle: boolean) {
   const accountId = Number(f.account_id);
   const account = Number.isInteger(accountId) && accountId > 0 && accountId <= 2147483647 ? (await db.query("SELECT id, username FROM compute_accounts WHERE id=$1 AND workspace_id=$2", [accountId, s.workspaceId])).rows[0] : undefined;
   if (!account) throw new AppError(422, "account_id không phải kết nối Kaggle của workspace.");
   const kernelType = f.kernel_type ?? "notebook";
   if (kernelType !== "notebook" && kernelType !== "script") throw new AppError(422, "kernel_type phải là notebook hoặc script.");
   let settings: PushSettings, code: string;
-  try { settings = parseSettings({ ...(typeof f.settings === "object" && f.settings ? f.settings : {}), ...Object.fromEntries(["machine", "enable_internet", "is_private", "dataset_sources", "competition_sources", "kernel_sources", "model_sources"].filter(k => f[k] !== undefined).map(k => [k, f[k]])) }); code = validateCode(f.code, kernelType); } catch (e) { throw bad(e); }
+  try { settings = parseSettings({ ...(typeof f.settings === "object" && f.settings ? f.settings : {}), ...Object.fromEntries(["machine", "enable_internet", "is_private", "dataset_sources", "competition_sources", "kernel_sources", "model_sources"].filter(k => f[k] !== undefined).map(k => [k, f[k]])) }); code = codeFromKaggle ? "" : validateCode(f.code, kernelType); } catch (e) { throw bad(e); }
   const summary = f.summary === undefined ? "" : typeof f.summary === "string" && f.summary.length <= MAX_SUMMARY ? f.summary.trim() : null;
   if (summary === null) throw new AppError(422, `summary tối đa ${MAX_SUMMARY} ký tự.`);
   const ref = typeof f.ref === "string" && f.ref.trim() ? f.ref.trim() : null, newTitle = typeof f.new_title === "string" && f.new_title.trim() ? f.new_title.trim() : null;
@@ -70,9 +79,65 @@ export async function createRequest(s: Scope, via: "mcp" | "api" | "web", f: Rec
     ideaId = Number(f.idea_id);
     if (!Number.isInteger(ideaId) || !(await db.query("SELECT 1 FROM documents WHERE id=$1 AND workspace_id=$2 AND kind='idea' AND (upload_state IS NULL OR upload_state='ready')", [ideaId, s.workspaceId])).rows.length) throw new AppError(422, "idea_id phải là một ý tưởng trong workspace.");
   }
-  await rateLimit(s.userId, "run-request", 30, 3600);
-  if (Number((await db.query("SELECT COUNT(*) FROM run_requests WHERE workspace_id=$1 AND status='pending'", [s.workspaceId])).rows[0].count) >= MAX_PENDING) throw new AppError(429, `Workspace đã có ${MAX_PENDING} yêu cầu chờ duyệt. Hãy duyệt, từ chối hoặc hủy bớt.`);
-  const id = (await db.query("INSERT INTO run_requests (workspace_id, account_id, ref, new_title, kernel_type, code, settings, summary, idea_id, requested_by, requested_via) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id", [s.workspaceId, account.id, ref, newTitle, kernelType, code, JSON.stringify(settings), summary, ideaId, s.userId, via])).rows[0].id;
+  return { accountId: account.id as number, ref, newTitle, kernelType: kernelType as "notebook" | "script", code, settings, summary, ideaId };
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Sends an `approved` row to Kaggle. Any failure puts it back to `pending` with the error, since nothing ran. */
+async function push(id: number) {
+  const r = (await db.query("SELECT r.*, a.credential FROM run_requests r JOIN compute_accounts a ON a.id=r.account_id WHERE r.id=$1 AND r.status='approved'", [id])).rows[0];
+  if (!r) throw new AppError(409, "Yêu cầu này không còn ở trạng thái đã duyệt.");
+  try {
+    const token = decryptToken(r.credential);
+    let current: Record<string, unknown> | null = null, code: string = r.code, kernelType: "notebook" | "script" = r.kernel_type;
+    if (r.ref) {
+      const [userName, kernelSlug] = r.ref.split("/"), k = await kaggleCall(token, "GetKernel", { userName, kernelSlug });
+      current = isObj(k.metadata) ? k.metadata : null;
+      if (!code) { code = isObj(k.blob) && typeof k.blob.source === "string" ? k.blob.source : ""; if (!code) throw new AppError(502, "Kaggle không trả code của version hiện tại."); if (current?.kernelType === "script" || current?.kernelType === "notebook") kernelType = current.kernelType; }
+    }
+    const body = buildSaveKernelBody({ ref: r.ref, newTitle: r.new_title, kernelType, code, settings: r.settings, current });
+    if (body.enableGpu || body.enableTpu) {
+      const kind = body.enableTpu ? "TPU" : "GPU", q = normalizeQuota(await kaggleCall(token, "GetAcceleratorQuotaStatistics", {})).find(x => x.resource === kind);
+      if (q && parseFloat(q.remaining) <= 0) throw new AppError(409, `Tài khoản đã hết quota ${kind} (làm mới lúc ${q.refreshAt || "?"}). Hãy chọn máy khác hoặc chờ quota.`);
+    }
+    const saved = await kaggleCall(token, "SaveKernel", body);
+    if (typeof saved.error === "string" && saved.error) throw new AppError(502, `Kaggle từ chối: ${saved.error.slice(0, 300)}`);
+    await db.query("UPDATE run_requests SET status='running', ref=$2, version=$3, code=$4, kernel_type=$5, error=NULL, updated_at=NOW() WHERE id=$1", [id, savedRef(saved.ref) ?? r.ref, Number.isInteger(saved.versionNumber) ? saved.versionNumber : null, code, kernelType]);
+    if (r.idea_id) await db.query("UPDATE documents SET status='trying', updated_at=NOW() WHERE id=$1 AND kind='idea' AND status='new'", [r.idea_id]);
+  } catch (e) {
+    const err = e instanceof AppError ? e : new AppError(502, "Không gửi được lên Kaggle.");
+    await db.query("UPDATE run_requests SET status='pending', reviewed_by=NULL, reviewed_at=NULL, error=$2, updated_at=NOW() WHERE id=$1", [id, err.message]);
+    throw err;
+  }
+}
+
+export async function approveRequest(s: Scope, idRaw: unknown): Promise<RunRequest> {
+  await initRunRequests(); await rateLimit(s.userId, "run-approve", 10, 60); await sweep(s.workspaceId);
+  const id = reqId(idRaw);
+  // One statement claims the row, so two reviewers clicking at once push only once.
+  const claimed = await db.query("UPDATE run_requests SET status='approved', reviewed_by=$3, reviewed_at=NOW(), updated_at=NOW() WHERE id=$1 AND workspace_id=$2 AND status='pending' RETURNING id", [id, s.workspaceId, s.userId]);
+  if (!claimed.rows.length) { await getRequest(s, id); throw new AppError(409, "Yêu cầu này không còn chờ duyệt."); }
+  await push(id);
+  return getRequest(s, id);
+}
+
+/** A member presses "Chạy" on the web: they are the reviewer, so the row starts `approved`. */
+export async function runNow(s: Scope, f: Record<string, unknown>): Promise<RunRequest> {
+  await initRunRequests(); await rateLimit(s.userId, "run-approve", 10, 60);
+  let input = f, fromKaggle = true;
+  if (f.run_id !== undefined) {
+    const run = (await db.query("SELECT account_id, ref, code FROM experiment_runs WHERE id=$1 AND workspace_id=$2", [Number(f.run_id) || 0, s.workspaceId])).rows[0];
+    if (!run) throw new AppError(404, "Không tìm thấy run.");
+    if (!run.code) throw new AppError(422, "Run này không lưu code, không chạy lại được.");
+    if (!run.account_id || !run.ref) throw new AppError(422, "Run này không gắn với notebook Kaggle nào.");
+    let notebook = false; try { notebook = Array.isArray(JSON.parse(run.code)?.cells); } catch { /* script source */ }
+    input = { ...f, account_id: run.account_id, ref: run.ref, code: run.code, kernel_type: notebook ? "notebook" : "script" }; fromKaggle = false;
+  }
+  if (fromKaggle && (typeof input.ref !== "string" || !input.ref)) throw new AppError(422, "Cần ref của notebook hoặc run_id.");
+  const v = await validated(s, input, fromKaggle);
+  const id = (await db.query("INSERT INTO run_requests (workspace_id, account_id, ref, new_title, kernel_type, code, settings, summary, idea_id, requested_by, requested_via, status, reviewed_by, reviewed_at) VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,'web','approved',$9,NOW()) RETURNING id", [s.workspaceId, v.accountId, v.ref, v.kernelType, v.code, JSON.stringify(v.settings), v.summary, v.ideaId, s.userId])).rows[0].id;
+  await push(id);
   return getRequest(s, id);
 }
 
