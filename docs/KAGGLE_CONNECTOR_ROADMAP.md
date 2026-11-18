@@ -35,5 +35,10 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 - [ ] Đồng bộ định kỳ, retry, giới hạn request và thông báo lỗi.
 - [ ] Kiểm thử end-to-end với Kaggle; sau đó thêm MLflow, biểu đồ và thông báo.
 
+## 5. Tài liệu nghiên cứu
+- [x] Ý tưởng, báo cáo và file dùng chung theo workspace; liên kết paper và run; trạng thái ý tưởng.
+- [x] Upload HTML, PDF, Word, ảnh lên Cloudflare R2 qua link ký sẵn; xem an toàn trên web.
+- [x] Tool MCP và REST cho AI và script viết tài liệu.
+
 ## Tiêu chí hoàn thành MVP
 Thêm tài khoản thật, kiểm tra, thay credential, ngắt kết nối; xem quota và ít nhất một notebook thật khi Kaggle hỗ trợ; xử lý lỗi rõ ràng. Không sử dụng kết nối để vượt hạn mức Kaggle. Thời gian tham khảo 13–19 ngày làm việc; điều chỉnh theo kết quả kiểm chứng.

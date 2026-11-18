@@ -76,3 +76,27 @@ Kiểm thử cách ly dữ liệu, token, MCP, thao tác hàng loạt, xuất Bi
 ## Theo dõi experiment
 
 Mỗi lần chạy notebook Kaggle được lưu thành một run gồm config, metrics, history theo step, trạng thái, môi trường và code. Thêm helper [`docs/ros_tracker.py`](docs/ros_tracker.py) vào notebook (utility script, dataset hoặc dán vào cell đầu) và gọi `log_config`, `log_metric`, `log_summary`, `finish`; helper ghi `/kaggle/working/ros_run.json` và in các dòng `@@ROS_CONFIG` / `@@ROS_METRIC` làm dự phòng. Run được thu khi màn hình Logs thấy notebook chạy xong, khi nhấn **Thu run từ Kaggle**, hoặc khi Claude gọi `capture_run`; chưa có tiến trình chạy nền. Run ở Colab hoặc máy local được ghi thủ công trên giao diện hoặc qua `log_run`. Có thể so sánh 2–10 run và dùng 8 tool MCP cho run. Hướng dẫn đầy đủ và giới hạn: [docs/EXPERIMENT_TRACKING.md](docs/EXPERIMENT_TRACKING.md). Chưa kiểm chứng với notebook thật.
+
+## Tài liệu (ý tưởng, báo cáo, file)
+
+Mục **Tài liệu** là chỗ chung của workspace cho ý tưởng, báo cáo và file. Mỗi tài liệu có loại **Ý tưởng** (trạng thái Mới → Đang thử → Đã chọn / Bỏ), **Báo cáo** hoặc **Khác**, và liên kết được tới paper và run trong cùng workspace. Bấm vào tài liệu để mở ở tab mới.
+
+- **Viết mới:** Markdown hoặc HTML, có xem trước.
+- **Upload:** HTML, PDF, Word, ảnh… tối đa 25 MB. PDF, ảnh, HTML và Word xem được ngay trên web; loại khác tải về. HTML luôn hiển thị trong khung cách ly không chạy script.
+- **AI viết qua MCP:** các tool `list_docs`, `get_doc`, `create_doc`, `update_doc`, `delete_doc` (cùng token cá nhân như các tool paper và run). Script hoặc n8n dùng REST `/api/docs` với `Authorization: Bearer <token>`.
+
+### Cấu hình kho file (Cloudflare R2)
+
+File không đi qua app: trình duyệt upload thẳng lên kho bằng link ký sẵn, nên VPS nhỏ không phải gánh file lớn.
+
+1. Cloudflare dashboard → **R2 Object Storage** (cần thêm thẻ thanh toán để bật R2, kể cả gói miễn phí 10 GB) → tạo bucket.
+2. **Overview → Account Details → API Tokens → Manage → Create Account API token**: quyền **Object Read & Write**, chỉ áp dụng cho bucket vừa tạo. Copy **Access Key ID** và **Secret Access Key** (secret chỉ hiện một lần).
+3. Bucket → **Settings → CORS Policy**, thêm mọi địa chỉ mở app (local và URL triển khai, đúng `https://…`, không có `/` cuối):
+   ```json
+   [{ "AllowedOrigins": ["http://localhost:3001", "https://<ten-may>.<tailnet>.ts.net"], "AllowedMethods": ["GET", "PUT"], "AllowedHeaders": ["content-type"], "ExposeHeaders": ["content-type", "content-disposition", "content-length"], "MaxAgeSeconds": 3600 }]
+   ```
+4. Điền `S3_ENDPOINT=https://<account_id>.r2.cloudflarestorage.com`, `S3_REGION=auto`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` vào `.env` (Docker) và `apps/web/.env.local` (`npm run dev`).
+5. Kiểm tra: `cd apps/web && node --env-file=.env.local scripts/storage-check.mjs --origin <địa chỉ app>`. Cả 6 dòng phải ✓.
+
+Đổi sang dịch vụ S3 khác (AWS S3, MinIO…) chỉ cần đổi 5 biến trên. `STORAGE_LIMIT_MB` (mặc định 9000) giới hạn tổng dung lượng file của cả project.
+

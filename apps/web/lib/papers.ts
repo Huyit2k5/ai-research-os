@@ -529,6 +529,8 @@ export async function mergePapers(s: Scope, keepRaw: unknown, mergeRaw: unknown)
     // Experiment runs (lib/experiments.ts) reference papers with ON DELETE SET NULL; re-point the workspace's runs so merging keeps the links.
     let runsMoved = 0;
     if ((await c.query("SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='experiment_runs' AND column_name='workspace_id'")).rowCount) runsMoved = (await c.query("UPDATE experiment_runs SET paper_id=$1 WHERE paper_id=ANY($2::int[])", [keepId, mergeIds])).rowCount ?? 0;
+    // Document links (lib/documents.ts) cascade on paper delete; copy them to the kept paper first.
+    if ((await c.query("SELECT to_regclass('document_papers') AS t")).rows[0].t) await c.query("INSERT INTO document_papers (document_id, paper_id) SELECT DISTINCT document_id, $1::int FROM document_papers WHERE paper_id=ANY($2::int[]) ON CONFLICT DO NOTHING", [keepId, mergeIds]);
     await c.query("DELETE FROM papers WHERE workspace_id=$1 AND id=ANY($2::int[])", [s.workspaceId, mergeIds]);
     const paper = (await c.query(
       "UPDATE papers SET doi=$3, arxiv_id=$4, openalex_id=$5, venue=$6, venue_type=$7, abstract=$8, url=$9, pdf_url=$10, year=$11, work_type=$12, authors=$13, tags=$14, cited_by_count=$15 WHERE id=$1 AND workspace_id=$2 RETURNING *",
