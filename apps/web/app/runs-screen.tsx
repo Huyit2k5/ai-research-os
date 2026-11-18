@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactNode, type SetStateAction } from "react";
-import { ArrowUpDown, CloudDownload, Code2, Columns3, Copy, ExternalLink, GitCompareArrows, Pencil, Plus, Search, Tag, TestTubes, Trash2, Trophy, X } from "lucide-react";
+import { ArrowUpDown, CloudDownload, Code2, Columns3, Copy, ExternalLink, GitCompareArrows, ImageDown, Maximize2, Minimize2, Pencil, Plus, Search, Tag, TestTubes, Trash2, Trophy, X } from "lucide-react";
 import type { Account, SyncData } from "./connector-screens";
 
 type Scalar = string | number | boolean | null;
@@ -80,16 +80,46 @@ function nearest(points: { x: number; y: number }[], x: number) {
   return lo > 0 && Math.abs(points[lo - 1].x - x) <= Math.abs(points[lo].x - x) ? points[lo - 1] : points[lo];
 }
 
+// train_loss / val_loss / loss share one chart in the expanded view, so over- and underfitting are visible at a glance.
+function metricGroups(keys: string[]) {
+  const groups = new Map<string, string[]>();
+  for (const k of keys) { const base = k.replace(/^(train|training|val|valid|validation|test|eval)[_./-]/i, "") || k; groups.set(base, [...(groups.get(base) ?? []), k]); }
+  return [...groups].map(([name, keys]) => ({ name, keys }));
+}
+// A serialized SVG loses the page stylesheet, so computed styles are inlined before drawing it onto a 2x canvas with a title and legend.
+async function savePng(svg: SVGSVGElement, title: string, series: Series[], fileName: string) {
+  const w = svg.width.baseVal.value, h = svg.height.baseVal.value, k = 2, font = "Arial, Helvetica, sans-serif";
+  const measure = document.createElement("canvas").getContext("2d")!; measure.font = `13px ${font}`;
+  const legend: { s: Series; x: number; y: number }[] = []; let lx = 12, ly = 52;
+  if (series.length >= 2) for (const s of series) { const iw = 34 + measure.measureText(s.name).width; if (lx + iw > w && lx > 12) { lx = 12; ly += 22; } legend.push({ s, x: lx, y: ly }); lx += iw; }
+  const head = legend.length ? ly + 16 : 40;
+  const clone = svg.cloneNode(true) as SVGSVGElement; clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  const from = svg.querySelectorAll("*"), to = clone.querySelectorAll("*");
+  from.forEach((el, i) => { const cs = getComputedStyle(el); to[i].setAttribute("style", ["fill", "stroke", "stroke-width", "stroke-dasharray", "font-size", "font-family", "font-weight", "opacity"].map(p => `${p}:${cs.getPropertyValue(p)}`).join(";")); });
+  const img = new Image(); img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(clone))}`; await img.decode();
+  const canvas = document.createElement("canvas"); canvas.width = w * k; canvas.height = (h + head) * k;
+  const ctx = canvas.getContext("2d")!; ctx.scale(k, k); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h + head);
+  ctx.fillStyle = "#182c4d"; ctx.font = `bold 16px ${font}`; ctx.fillText(title, 12, 26, w - 24);
+  ctx.font = `13px ${font}`; for (const { s, x, y } of legend) { ctx.fillStyle = s.color; ctx.fillRect(x, y - 5, 14, 3); ctx.fillStyle = "#3b506b"; ctx.fillText(s.name, x + 20, y); }
+  ctx.drawImage(img, 0, head, w, h);
+  const blob = await new Promise<Blob | null>(done => canvas.toBlob(done, "image/png")); if (!blob) throw new Error("toBlob");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${fileName.replace(/[^\p{L}\p{N}_.-]+/gu, "_").replace(/^_+|_+$/g, "").slice(0, 100) || "bieu-do"}.png`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 /** Line chart in inline SVG: one y axis, crosshair + tooltip with every series, legend and direct end labels, table view. */
-function LineChart({ series, metric, xLabel, empty }: { series: Series[]; metric: string; xLabel: string; empty: string }) {
+function LineChart({ series, metric, xLabel, empty, title }: { series: Series[]; metric: string; xLabel: string; empty: string; title: string }) {
   const [wrap, width] = useWidth();
-  const [hover, setHover] = useState<number | null>(null);
+  const [hover, setHover] = useState<number | null>(null), [saveState, setSaveState] = useState<"" | "busy" | "error">("");
+  const svgRef = useRef<SVGSVGElement>(null);
   const drawn = series.filter(s => s.points.length > 0);
   const xs = [...new Set(drawn.flatMap(s => s.points.map(p => p.x)))].sort((a, b) => a - b);
-  const H = 260, labels = drawn.length >= 2 && drawn.length <= 4 && width >= 480;
-  const M = { l: 58, r: labels ? 104 : 18, t: 14, b: 42 }, pw = Math.max(width - M.l - M.r, 10), ph = H - M.t - M.b;
+  const H = width >= 640 ? 330 : 260, labels = drawn.length >= 2 && drawn.length <= 4 && width >= 480;
   let yMin = Infinity, yMax = -Infinity; for (const s of drawn) for (const p of s.points) { if (p.y < yMin) yMin = p.y; if (p.y > yMax) yMax = p.y; }
-  const yS = niceScale(drawn.length ? yMin : 0, drawn.length ? yMax : 1, 5), xS = niceScale(xs[0] ?? 0, xs[xs.length - 1] ?? 1, Math.max(2, Math.floor(pw / 90)));
+  const yS = niceScale(drawn.length ? yMin : 0, drawn.length ? yMax : 1, 5);
+  // Left margin grows with the widest y tick (e.g. "2.50e-4") so the rotated axis label never overlaps it.
+  const M = { l: Math.max(58, 30 + 7.5 * Math.max(...yS.ticks.map(t => fmt(t).length))), r: labels ? 104 : 18, t: 14, b: 42 }, pw = Math.max(width - M.l - M.r, 10), ph = H - M.t - M.b;
+  const xS = niceScale(xs[0] ?? 0, xs[xs.length - 1] ?? 1, Math.max(2, Math.floor(pw / 90)));
   const xMin = xs.length > 1 ? xs[0] : xS.lo, xMax = xs.length > 1 ? xs[xs.length - 1] : xS.hi;
   const sx = (x: number) => M.l + (xMax === xMin ? pw / 2 : (x - xMin) / (xMax - xMin) * pw), sy = (y: number) => M.t + ph - (y - yS.lo) / (yS.hi - yS.lo) * ph;
   const xTicks = xS.ticks.filter(t => t >= xMin && t <= xMax);
@@ -112,9 +142,10 @@ function LineChart({ series, metric, xLabel, empty }: { series: Series[]; metric
   const tipLeft = hx === null ? 0 : sx(hx) + 14 > width - 190 ? Math.max(sx(hx) - 190, 0) : sx(hx) + 14;
   const tableRows = xs.slice(-300), maps = drawn.map(s => new Map(s.points.map(p => [p.x, p.y])));
   return <div ref={wrap} className="rn-chart">
-    {drawn.length >= 2 && <div className="rn-legend">{drawn.map(s => <span key={s.name}><i style={{ background: s.color }} />{s.name}</span>)}</div>}
+    <div className="rn-chart-head">{drawn.length >= 2 ? <div className="rn-legend">{drawn.map(s => <span key={s.name}><i style={{ background: s.color }} />{s.name}</span>)}</div> : <span />}
+      <button className="rn-link rn-save" disabled={saveState === "busy"} onClick={() => { if (!svgRef.current) return; setSaveState("busy"); savePng(svgRef.current, title, drawn, title).then(() => setSaveState(""), () => setSaveState("error")); }}><ImageDown size={14} /> {saveState === "busy" ? "Đang lưu..." : saveState === "error" ? "Lỗi, thử lại" : "Lưu ảnh PNG"}</button></div>
     <div className="rn-chart-box">
-      {width > 0 && <svg width={width} height={H} role="img" tabIndex={0} aria-label={`Biểu đồ ${metric} theo ${xLabel}, ${drawn.length} đường. Dùng phím mũi tên để xem giá trị.`} onKeyDown={key} onFocus={() => setHover(h => h ?? xs.length - 1)} onBlur={() => setHover(null)}>
+      {width > 0 && <svg ref={svgRef} width={width} height={H} role="img" tabIndex={0} aria-label={`Biểu đồ ${metric} theo ${xLabel}, ${drawn.length} đường. Dùng phím mũi tên để xem giá trị.`} onKeyDown={key} onFocus={() => setHover(h => h ?? xs.length - 1)} onBlur={() => setHover(null)}>
         {yS.ticks.map(t => <g key={`y${t}`}><line x1={M.l} x2={M.l + pw} y1={sy(t)} y2={sy(t)} className="rn-grid" /><text x={M.l - 8} y={sy(t)} dy="0.32em" textAnchor="end" className="rn-tick">{fmt(t)}</text></g>)}
         <line x1={M.l} x2={M.l + pw} y1={M.t + ph} y2={M.t + ph} className="rn-axis" />
         {xTicks.map(t => <text key={`x${t}`} x={sx(t)} y={M.t + ph + 16} textAnchor="middle" className="rn-tick">{fmt(t)}</text>)}
@@ -209,19 +240,19 @@ function ManualModal({ onClose, onDone }: { onClose: () => void; onDone: (r: Run
   </div></div>;
 }
 
-function Drawer({ run, papers, alerts, close, patch, remove, loadCode }: { run: RunDetail; papers: PaperLite[] | null; alerts: ReactNode; close: () => void; patch: (body: object, done?: string) => Promise<boolean>; remove: () => void; loadCode: () => Promise<void> }) {
-  const [nameEdit, setNameEdit] = useState<string | null>(null), [notes, setNotes] = useState(run.notes), [newTag, setNewTag] = useState(""), [copied, setCopied] = useState(false), [codeBusy, setCodeBusy] = useState(false);
+function Drawer({ run, papers, alerts, close, patch, remove }: { run: RunDetail; papers: PaperLite[] | null; alerts: ReactNode; close: () => void; patch: (body: object, done?: string) => Promise<boolean>; remove: () => void }) {
+  const [nameEdit, setNameEdit] = useState<string | null>(null), [notes, setNotes] = useState(run.notes), [newTag, setNewTag] = useState(""), [copied, setCopied] = useState(false);
   const hKeys = useMemo(() => historyKeys([run.history]), [run.history]);
-  const [chartKey, setChartKey] = useState(() => hKeys[0] ?? "");
-  const hasStep = (run.history ?? []).some(p => typeof p.step === "number");
+  const [chartKey, setChartKey] = useState(() => hKeys[0] ?? ""), [full, setFull] = useState(false);
+  const groups = useMemo(() => metricGroups(hKeys), [hKeys]), xLabel = (run.history ?? []).some(p => typeof p.step === "number") ? "Step" : "Lần ghi";
   const metrics = Object.entries(run.metrics), config = Object.entries(run.config), env = Object.entries(run.env ?? {}).filter(([, v]) => v !== null && v !== undefined && !(Array.isArray(v) && !v.length));
   const paperOptions = papers ?? [];
   function addTag(e: FormEvent) { e.preventDefault(); const t = newTag.trim(); if (!t) return; if (run.tags.some(x => x.toLowerCase() === t.toLowerCase())) { setNewTag(""); return; } void patch({ tags: [...run.tags, t] }).then(ok => ok && setNewTag("")); }
-  return <div className="rn-drawer-back" onClick={close}><aside className="rn-drawer" role="dialog" aria-modal="true" aria-labelledby="rn-drawer-title" onClick={e => e.stopPropagation()}>
+  return <div className="rn-drawer-back" onClick={close}><aside className={`rn-drawer${full ? " full" : ""}`} role="dialog" aria-modal="true" aria-labelledby="rn-drawer-title" onClick={e => e.stopPropagation()}>
     <div className="rn-drawer-head">
       {nameEdit !== null ? <form className="rn-name-form" onSubmit={e => { e.preventDefault(); void patch({ name: nameEdit }, "Đã đổi tên run.").then(ok => ok && setNameEdit(null)); }}><input autoFocus value={nameEdit} onChange={e => setNameEdit(e.target.value)} maxLength={200} required aria-label="Tên run" /><button className="primary">Lưu</button><button type="button" className="secondary" onClick={() => setNameEdit(null)}>Hủy</button></form>
         : <h2 id="rn-drawer-title"><span className="rn-id">#{run.id}</span> {run.name}<button className="rn-icon-sm" onClick={() => setNameEdit(run.name)} aria-label="Đổi tên run"><Pencil size={13} /></button></h2>}
-      <button className="icon-button" onClick={close} aria-label="Đóng"><X size={18} /></button>
+      <div className="rn-head-btns"><button className="icon-button" onClick={() => setFull(f => !f)} aria-label={full ? "Thu nhỏ" : "Phóng to toàn màn hình"} title={full ? "Thu nhỏ" : "Phóng to toàn màn hình"}>{full ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button><button className="icon-button" onClick={close} aria-label="Đóng"><X size={18} /></button></div>
     </div>
     <div className="rn-meta"><SourceBadge r={run} /><StatusBadge s={run.status} /><RunLabel r={run} /><span>Chạy: {when(run.run_at ?? run.created_at)}</span>{run.created_by && <span className="rn-by">Tạo bởi <b>{run.created_by}</b></span>}{run.ref && run.source === "kaggle" && <a className="rn-link" href={`https://www.kaggle.com/code/${run.ref}`} target="_blank" rel="noreferrer">Mở Kaggle <ExternalLink size={11} /></a>}</div>
     <p className="rn-captured">Nguồn dữ liệu: <b>{CAPTURED[run.captured_from] ?? run.captured_from}</b>{run.source === "kaggle" && <> · thu lúc {when(run.captured_at)}</>}</p>
@@ -231,8 +262,9 @@ function Drawer({ run, papers, alerts, close, patch, remove, loadCode }: { run: 
     <div className="rn-section">Metrics cuối</div>
     {metrics.length ? <div className="rn-tiles">{metrics.map(([k, v]) => <div key={k} className="rn-tile"><span>{k}</span><b>{fmt(v)}</b><small>{lowerBetter(k) ? "thấp hơn là tốt" : "cao hơn là tốt"}</small></div>)}</div> : <p className="rn-muted">Run này chưa có metric.</p>}
 
-    <div className="rn-section rn-section-row"><span>Lịch sử theo step</span>{hKeys.length > 1 && <select value={chartKey} onChange={e => setChartKey(e.target.value)} aria-label="Metric trên biểu đồ">{hKeys.map(k => <option key={k}>{k}</option>)}</select>}</div>
-    <LineChart series={chartKey ? [{ name: chartKey, color: COLORS[0], points: pointsOf(run.history, chartKey) }] : []} metric={chartKey} xLabel={hasStep ? "Step" : "Lần ghi"} empty="Run này không có lịch sử metric. Gọi log_metric(step=..., ...) trong notebook để vẽ đường học." />
+    <div className="rn-section rn-section-row"><span>Lịch sử theo step</span>{!full && hKeys.length > 1 && <span className="rn-head-btns"><select value={chartKey} onChange={e => setChartKey(e.target.value)} aria-label="Metric trên biểu đồ">{hKeys.map(k => <option key={k}>{k}</option>)}</select><button className="rn-link" onClick={() => setFull(true)}><Maximize2 size={13} /> Xem tất cả</button></span>}</div>
+    {full && groups.length > 0 ? <div className="rn-chart-grid">{groups.map(g => <div key={g.name} className="rn-chart-card"><div className="rn-chart-title">{g.name}</div><LineChart series={g.keys.map((k, i) => ({ name: k, color: COLORS[i % COLORS.length], points: pointsOf(run.history, k) }))} metric={g.name} xLabel={xLabel} title={`#${run.id} ${run.name} · ${g.name}`} empty="Không có dữ liệu." /></div>)}</div>
+      : <LineChart series={chartKey ? [{ name: chartKey, color: COLORS[0], points: pointsOf(run.history, chartKey) }] : []} metric={chartKey} xLabel={xLabel} title={`#${run.id} ${run.name} · ${chartKey}`} empty="Run này không có lịch sử metric. Gọi log_metric(step=..., ...) trong notebook để vẽ đường học." />}
 
     <div className="rn-section rn-section-row"><span>Config ({config.length})</span>{config.length > 0 && <button className="rn-link" onClick={() => { void navigator.clipboard?.writeText(JSON.stringify(run.config, null, 2)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); }).catch(() => setCopied(false)); }}><Copy size={11} /> {copied ? "Đã sao chép" : "Sao chép JSON"}</button>}</div>
     {config.length ? <div className="rn-scroll rn-kvtable"><table><tbody>{config.map(([k, v]) => <tr key={k}><th>{k}</th><td>{show(v)}</td></tr>)}</tbody></table></div> : <p className="rn-muted">Run này chưa có config.</p>}
@@ -255,8 +287,7 @@ function Drawer({ run, papers, alerts, close, patch, remove, loadCode }: { run: 
     {notes !== run.notes && <div className="rn-actions"><button className="primary" onClick={() => void patch({ notes }, "Đã lưu ghi chú.")}>Lưu ghi chú</button><button className="secondary" onClick={() => setNotes(run.notes)}>Hoàn tác</button></div>}
 
     <div className="rn-section rn-section-row"><span>Code notebook</span>{run.code_hash && <small className="rn-muted" title={run.code_hash}>sha256 {run.code_hash.slice(0, 12)}</small>}</div>
-    {run.code === undefined ? <button className="secondary" disabled={codeBusy} onClick={() => { setCodeBusy(true); void loadCode().finally(() => setCodeBusy(false)); }}><Code2 size={14} /> {codeBusy ? "Đang tải..." : "Xem code"}</button>
-      : run.code ? <pre className="rn-code">{run.code}</pre> : <p className="rn-muted">Không có bản chụp code cho run này.</p>}
+    {run.code_hash ? <a className="secondary rn-code-link" href={`/runs/${run.id}/code`} target="_blank" rel="noopener"><Code2 size={14} /> Xem code <ExternalLink size={12} /></a> : <p className="rn-muted">Không có bản chụp code cho run này.</p>}
 
     {run.can_delete !== false ? <div className="rn-danger"><button className="secondary danger" onClick={remove}><Trash2 size={14} /> Xóa run</button></div>
       : <div className="rn-danger"><p className="rn-muted">Chỉ người tạo run hoặc quản trị workspace mới xóa được run này.</p></div>}
@@ -291,7 +322,7 @@ function CompareView({ data, history, back, open }: { data: Compare; history: Re
         </tbody>
       </table></div>
       <div className="rn-section rn-section-row"><span>Đường học chồng lớp</span>{keys.length > 0 && <select value={metric} onChange={e => setMetric(e.target.value)} aria-label="Metric để so sánh">{keys.map(k => <option key={k}>{k}</option>)}</select>}</div>
-      <LineChart series={series} metric={metric} xLabel={hasStep ? "Step" : "Lần ghi"} empty="Các run đã chọn không có lịch sử metric để vẽ." />
+      <LineChart series={series} metric={metric} xLabel={hasStep ? "Step" : "Lần ghi"} title={`So sánh ${data.runs.length} run · ${metric}`} empty="Các run đã chọn không có lịch sử metric để vẽ." />
       {data.runs.length > COLORS.length && <p className="rn-muted">Biểu đồ chỉ vẽ {COLORS.length} run đầu để các màu còn phân biệt được.</p>}
       {metric && missing.length > 0 && missing.length < series.length && <p className="rn-muted">Không có lịch sử “{metric}”: {missing.join(", ")}.</p>}
     </div>
@@ -346,10 +377,6 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
     if (!run || !window.confirm(`Xóa run “${run.name}”? Config, metrics, lịch sử và code đã lưu sẽ mất, không thể hoàn tác.`)) return;
     setError(""); setInfo("");
     try { await call(`/api/runs/${run.id}`, "DELETE"); setOpen(o => o?.id === run.id ? null : o); setSelected(s => s.filter(x => x !== run.id)); setInfo("Đã xóa run."); await reload(); } catch (e) { setError(msg(e, "Không thể xóa run.")); }
-  }
-  async function loadCode() {
-    if (!open) return; const id = open.id;
-    try { const r = await call<RunDetail>(`/api/runs/${id}?code=1`); setOpen(o => o && o.id === id ? { ...o, code: r.code ?? null } : o); } catch (e) { setError(msg(e, "Không thể tải code.")); }
   }
   async function runCompare() {
     const ids = selected.slice(0, MAX_COMPARE); setComparing(true); setError(""); setInfo("");
@@ -440,7 +467,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
       </div>
     </section>}
 
-    {open && <Drawer key={open.id} run={open} papers={papers} alerts={alerts} close={() => setOpen(null)} patch={patch} remove={() => void remove()} loadCode={loadCode} />}
+    {open && <Drawer key={open.id} run={open} papers={papers} alerts={alerts} close={() => setOpen(null)} patch={patch} remove={() => void remove()} />}
     {modal === "capture" && <CaptureModal accounts={accounts} data={data} onClose={() => setModal(null)} onDone={r => { setModal(null); void reload(); void view(r.run.id); setInfo(r.created ? `Đã thu run #${r.run.id}: ${r.run.name}.` : `Đã cập nhật run #${r.run.id}: ${r.run.name}.`); }} />}
     {modal === "manual" && <ManualModal onClose={() => setModal(null)} onDone={r => { setModal(null); void reload(); void view(r.id); setInfo(`Đã thêm run #${r.id}: ${r.name}.`); }} />}
   </div>;
