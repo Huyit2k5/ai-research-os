@@ -4,6 +4,7 @@ import { use, useCallback, useEffect, useState } from "react";
 import { Download, FileText, Pencil, Trash2, X } from "lucide-react";
 import { Markdown } from "../../notebook-view";
 import { api, IDEA_STATUS, KINDS, size, when, type Doc } from "../../docs-screen";
+import { REQUEST_STATUS, type RunRequest } from "../../run-request-shared";
 
 type Full = Doc & { body: string | null; papers: { id: number; title: string }[]; runs: { id: number; name: string }[] };
 const INLINE_IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -44,6 +45,8 @@ function Viewer({ doc }: { doc: Full }) {
 export default function DocPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [doc, setDoc] = useState<Full | null>(null), [error, setError] = useState(""), [info, setInfo] = useState(""), [deleted, setDeleted] = useState(false);
+  const [requests, setRequests] = useState<RunRequest[]>([]);
+  useEffect(() => { if (doc?.kind !== "idea") return; fetch(`/api/run-requests?idea_id=${doc.id}&limit=50`, { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(b => setRequests(Array.isArray(b?.items) ? b.items : [])).catch(() => {}); }, [doc?.kind, doc?.id]);
   const [edit, setEdit] = useState<{ title: string; body: string } | null>(null), [tags, setTags] = useState(""), [options, setOptions] = useState<{ papers: { id: number; title: string }[]; runs: { id: number; name: string }[] } | null>(null);
   const load = useCallback(async () => {
     try { const d = await api<Full>(`/api/docs/${encodeURIComponent(id)}`); setDoc(d); setTags(d.tags.join(", ")); document.title = `${d.title} · Tài liệu | AI Research OS`; }
@@ -77,6 +80,7 @@ export default function DocPage({ params }: { params: Promise<{ id: string }> })
           <select value="" onFocus={() => void pickLinks()} onChange={e => e.target.value && void patch({ paper_ids: [...doc.papers.map(x => x.id), Number(e.target.value)] }, "Đã liên kết paper.")} aria-label="Thêm paper"><option value="">+ Thêm paper…</option>{options?.papers.filter(p => !doc.papers.some(x => x.id === p.id)).map(p => <option key={p.id} value={p.id}>{p.title.length > 80 ? `${p.title.slice(0, 79)}…` : p.title}</option>)}</select></div>
         <div><b>Run liên kết</b>{doc.runs.length ? doc.runs.map(r => <span key={r.id} className="dc-chip">#{r.id} {r.name}<button onClick={() => void patch({ run_ids: doc.runs.filter(x => x.id !== r.id).map(x => x.id) }, "Đã gỡ run.")} aria-label={`Gỡ run ${r.name}`}><X size={11} /></button></span>) : <span className="dc-muted">Chưa có</span>}
           <select value="" onFocus={() => void pickLinks()} onChange={e => e.target.value && void patch({ run_ids: [...doc.runs.map(x => x.id), Number(e.target.value)] }, "Đã liên kết run.")} aria-label="Thêm run"><option value="">+ Thêm run…</option>{options?.runs.filter(r => !doc.runs.some(x => x.id === r.id)).map(r => <option key={r.id} value={r.id}>#{r.id} {r.name}</option>)}</select></div>
+        {doc.kind === "idea" && <div><b>Yêu cầu chạy</b>{requests.length ? requests.map(r => <a key={r.id} className="dc-chip" href={`/run-requests/${r.id}`} target="_blank" rel="noreferrer">#{r.id} {r.ref ?? r.new_title}{r.version ? ` v${r.version}` : ""} · {REQUEST_STATUS[r.status] ?? r.status}</a>) : <span className="dc-muted">Chưa có</span>}</div>}
         <form onSubmit={e => { e.preventDefault(); void patch({ tags: tags.split(",").map(t => t.trim()).filter(Boolean) }, "Đã lưu tag."); }}><b>Tag</b><input value={tags} onChange={e => setTags(e.target.value)} placeholder="phân cách bằng dấu phẩy" aria-label="Tag" /><button className="secondary">Lưu tag</button></form>
       </section>
     </>}
