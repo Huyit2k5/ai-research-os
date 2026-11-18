@@ -67,6 +67,11 @@ assert.equal(accA.status, 201);
 assert.equal((await request("/api/runs/capture", { method: "POST", cookie: b, body: { account_id: accA.body.id, ref: "runs-iso/notebook" } })).status, 404); ok("B cannot capture through A's Kaggle account");
 assert.equal((await request("/api/runs/capture", { method: "POST", cookie: b, body: { account_id: 2147483647, ref: "runs-iso/notebook" } })).status, 404); ok("capture with an unknown account is 404");
 assert.equal((await request(`/api/runs/${r1}`, { cookie: a })).body.name, run1.name); ok("A's run is intact after B's attempts");
+// Manual runs have no account, so filtering by A's connection hides them; the filter must also combine with metric sort ($7/$8 params).
+assert.equal((await request(`/api/runs?account=${accA.body.id}`, { cookie: a })).body.total, 0); ok("account filter excludes runs from other sources");
+const acctSorted = await request(`/api/runs?account=${accA.body.id}&sort=metric&metric=val_acc&order=desc`, { cookie: a });
+assert.equal(acctSorted.status, 200); assert.equal(acctSorted.body.total, 0); ok("account filter works with metric sort");
+assert.equal((await request("/api/runs?account=abc&sort=metric&metric=val_acc&order=desc", { cookie: a })).body.items.map(r => r.id).join(), [r1, r2].join()); ok("an invalid account filter is ignored");
 
 // 4. Compare
 const cmp = await request(`/api/runs/compare?ids=${r1},${r2}`, { cookie: a });

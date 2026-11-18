@@ -134,7 +134,7 @@ function LineChart({ series, metric, xLabel, empty }: { series: Series[]; metric
 // ---- Small pieces ----
 function StatusBadge({ s }: { s: string }) { return <span className={`rn-status s-${STATUS[s] ? s : "unknown"}`}>{STATUS[s] ?? s}</span>; }
 function SourceBadge({ r }: { r: Pick<Run, "source" | "env"> }) {
-  return r.source === "kaggle" ? <span className="rn-badge kaggle">Kaggle</span> : <span className="rn-badge manual">{typeof r.env?.platform === "string" ? r.env.platform : "Thủ công"}</span>;
+  return r.source === "kaggle" ? <span className="rn-badge rn-kaggle">Kaggle</span> : <span className="rn-badge manual">{typeof r.env?.platform === "string" ? r.env.platform : "Thủ công"}</span>;
 }
 function RunLabel({ r }: { r: Pick<Run, "ref" | "version"> }) { return r.ref ? <span className="rn-ref">{r.ref}{r.version ? ` · v${r.version}` : ""}</span> : null; }
 
@@ -300,7 +300,7 @@ function CompareView({ data, history, back, open }: { data: Compare; history: Re
 
 export default function RunsScreen({ accounts, data }: { accounts: Account[]; data: Record<number, SyncData> }) {
   const [items, setItems] = useState<Run[]>([]), [total, setTotal] = useState(0), [loading, setLoading] = useState(true);
-  const [q, setQ] = useState(""), [source, setSource] = useState(""), [status, setStatus] = useState(""), [tag, setTag] = useState("");
+  const [q, setQ] = useState(""), [source, setSource] = useState(""), [account, setAccount] = useState(""), [status, setStatus] = useState(""), [tag, setTag] = useState("");
   const [sort, setSort] = useState("newest"), [metric, setMetric] = useState(""), [order, setOrder] = useState<"asc" | "desc">("desc");
   const [selected, setSelected] = useState<number[]>([]);
   const [metricPick, setMetricPick] = useState<string[] | null>(null), [configPick, setConfigPick] = useState<string[] | null>(null), [colsOpen, setColsOpen] = useState(false);
@@ -312,7 +312,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
   const reqId = useRef(0);
   useEffect(() => { call<{ name?: string }>("/api/workspace").then(w => setWorkspace(typeof w?.name === "string" ? w.name : "")).catch(() => {}); }, []);
 
-  const qs = useCallback(() => new URLSearchParams({ q, source, status, tag, sort, ...(sort === "metric" && metric ? { metric, order } : {}) }).toString(), [q, source, status, tag, sort, metric, order]);
+  const qs = useCallback(() => new URLSearchParams({ q, source, status, tag, sort, ...(account ? { account } : {}), ...(sort === "metric" && metric ? { metric, order } : {}) }).toString(), [q, source, account, status, tag, sort, metric, order]);
   const reload = useCallback(async () => {
     const id = ++reqId.current; setLoading(true);
     try { const r = await call<Page>(`/api/runs?limit=${PAGE}&offset=0&${qs()}`); if (id !== reqId.current) return; setItems(r.items); setTotal(r.total); }
@@ -342,9 +342,10 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
       if (done) setInfo(done); return true;
     } catch (e) { setError(msg(e, "Không thể cập nhật run.")); return false; }
   }
-  async function remove() {
-    if (!open || !window.confirm(`Xóa run “${open.name}”? Config, metrics, lịch sử và code đã lưu sẽ mất, không thể hoàn tác.`)) return;
-    try { await call(`/api/runs/${open.id}`, "DELETE"); const id = open.id; setOpen(null); setSelected(s => s.filter(x => x !== id)); setInfo("Đã xóa run."); await reload(); } catch (e) { setError(msg(e, "Không thể xóa run.")); }
+  async function remove(run: Pick<Run, "id" | "name"> | null = open) {
+    if (!run || !window.confirm(`Xóa run “${run.name}”? Config, metrics, lịch sử và code đã lưu sẽ mất, không thể hoàn tác.`)) return;
+    setError(""); setInfo("");
+    try { await call(`/api/runs/${run.id}`, "DELETE"); setOpen(o => o?.id === run.id ? null : o); setSelected(s => s.filter(x => x !== run.id)); setInfo("Đã xóa run."); await reload(); } catch (e) { setError(msg(e, "Không thể xóa run.")); }
   }
   async function loadCode() {
     if (!open) return; const id = open.id;
@@ -374,7 +375,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
   const best: Record<string, number | null> = Object.fromEntries(mCols.map(k => { const v = items.map(r => r.metrics[k]).filter((x): x is number => typeof x === "number"); return [k, v.length < 2 ? null : lowerBetter(k) ? Math.min(...v) : Math.max(...v)]; }));
   function pick(cur: string[], set: (v: string[]) => void, k: string, max: number) { set(cur.includes(k) ? cur.filter(x => x !== k) : cur.length < max ? [...cur, k] : cur); }
 
-  const filtered = !!q || !!source || !!status || !!tag;
+  const filtered = !!q || !!source || !!account || !!status || !!tag;
   const allShown = items.filter(r => !selected.includes(r.id)).length === 0 && items.length > 0;
   const metricOptions = [...new Set([...knownMetrics, ...(metric ? [metric] : [])])].sort();
   const alerts = <>{error && <div className="alert error" role="alert">{error}<button className="rn-alert-x" onClick={() => setError("")} aria-label="Đóng thông báo"><X size={14} /></button></div>}{info && <div className="alert rn-info" role="status">{info}<button className="rn-alert-x" onClick={() => setInfo("")} aria-label="Đóng thông báo"><X size={14} /></button></div>}</>;
@@ -388,6 +389,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
       <label className="rn-search"><Search size={15} /><input value={q} onChange={e => setQ(e.target.value)} placeholder="Tìm theo tên run, notebook hoặc ghi chú" aria-label="Tìm run" /></label>
       <div className="rn-toolbar">
         <label>Nguồn<select value={source} onChange={e => setSource(e.target.value)}><option value="">Tất cả</option><option value="kaggle">Kaggle</option><option value="manual">Thủ công</option></select></label>
+        {accounts.length > 0 && <label>Tài khoản<select value={account} onChange={e => setAccount(e.target.value)}><option value="">Tất cả</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.label} (@{a.username})</option>)}</select></label>}
         <label>Trạng thái<select value={status} onChange={e => setStatus(e.target.value)}><option value="">Tất cả</option>{Object.entries(STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
         <label>Tag<select value={tag} onChange={e => setTag(e.target.value)}><option value="">Tất cả</option>{[...new Set([...knownTags, ...(tag ? [tag] : [])])].map(t => <option key={t}>{t}</option>)}</select></label>
         <label>Sắp xếp<select value={sort} onChange={e => { const v = e.target.value; setSort(v); if (v === "metric" && !metric && metricOptions[0]) { setMetric(metricOptions[0]); setOrder(lowerBetter(metricOptions[0]) ? "asc" : "desc"); } }}><option value="newest">Mới nhất</option><option value="oldest">Cũ nhất</option><option value="metric" disabled={!metricOptions.length}>Theo metric</option></select></label>
@@ -414,6 +416,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
             <th>Run</th><th>Trạng thái</th><th>Thời điểm chạy</th>
             {mCols.map(k => <th key={`m${k}`} className="rn-num"><button className={`rn-sort ${sort === "metric" && metric === k ? "on" : ""}`} onClick={() => pickMetricSort(k)} title={`Sắp xếp theo ${k} (${lowerBetter(k) ? "thấp hơn là tốt" : "cao hơn là tốt"})`}>{k}<ArrowUpDown size={11} /></button></th>)}
             {cCols.map(k => <th key={`c${k}`} className="rn-cfg">{k}</th>)}
+            <th className="rn-row-actions"><span className="rn-sr">Thao tác</span></th>
           </tr></thead>
           <tbody>{items.map(r => <tr key={r.id} className={`${open?.id === r.id ? "selected" : ""} ${selected.includes(r.id) ? "checked" : ""}`}>
             <td className="rn-check"><input type="checkbox" checked={selected.includes(r.id)} onChange={() => toggle(r.id)} aria-label={`Chọn ${r.name}`} /></td>
@@ -422,6 +425,7 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
             <td className="rn-time">{when(r.run_at ?? r.created_at)}</td>
             {mCols.map(k => { const v = r.metrics[k], isBest = typeof v === "number" && best[k] === v; return <td key={`m${k}`} className={`rn-num ${isBest ? "rn-best" : ""}`}>{isBest && <Trophy size={11} aria-label="Tốt nhất" />}{fmt(v)}</td>; })}
             {cCols.map(k => <td key={`c${k}`} className="rn-cfg" title={show(r.config[k])}>{k in r.config ? show(r.config[k]) : "—"}</td>)}
+            <td className="rn-row-actions">{r.can_delete && <button className="rn-del" onClick={() => void remove(r)} aria-label={`Xóa run ${r.name}`} title="Xóa run"><Trash2 size={15} /></button>}</td>
           </tr>)}</tbody>
         </table></div>}
         {loading && items.length === 0 && <div className="rn-empty">Đang tải...</div>}

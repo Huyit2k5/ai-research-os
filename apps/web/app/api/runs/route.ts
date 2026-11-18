@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   try {
     const scope = await owner(req), sp = new URL(req.url).searchParams, s = (k: string) => sp.get(k) || undefined;
-    return json(await listRuns(scope, { q: sp.get("q") || "", ref: s("ref"), tag: s("tag"), status: s("status"), source: s("source"), sort: s("sort"), metric: s("metric"), order: s("order"), limit: Number(sp.get("limit")) || 50, offset: Number(sp.get("offset")) || 0 }));
+    return json(await listRuns(scope, { q: sp.get("q") || "", ref: s("ref"), tag: s("tag"), status: s("status"), source: s("source"), account: Number(sp.get("account")) || undefined, sort: s("sort"), metric: s("metric"), order: s("order"), limit: Number(sp.get("limit")) || 50, offset: Number(sp.get("offset")) || 0 }));
   } catch (e) { return fail(e); }
 }
 
