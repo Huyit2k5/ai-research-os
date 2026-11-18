@@ -14,5 +14,5 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
   emailAndPassword: { enabled: true, minPasswordLength: 12, maxPasswordLength: 128 },
   rateLimit: { enabled: true, window: 60, max: 20 },
-  plugins: [organization({ invitationExpiresIn: 7 * 24 * 60 * 60 }), nextCookies()],
+  plugins: [organization({ invitationExpiresIn: 7 * 24 * 60 * 60, disableOrganizationDeletion: true }), nextCookies()],
 });

@@ -157,10 +157,32 @@ assert.equal((await request(`/api/docs/${pending.id}/complete`, { method: "POST"
 
 assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "big.pdf", content_type: "application/pdf", size: 25 * 1024 * 1024 + 1 } })).status, 413); ok("a file over 25 MB is refused");
 assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "zero.pdf", content_type: "application/pdf", size: 0 } })).status, 422); ok("an empty file is refused");
+const pg = new (await import("pg")).default.Client({ connectionString: process.env.DATABASE_URL }); await pg.connect();
+const backdate = (id) => pg.query("UPDATE documents SET created_at = NOW() - INTERVAL '2 hours' WHERE id=$1", [id]);
+// Earlier runs on the same database may leave reserved space for up to an hour; age it out so the quota checks start clean.
+await pg.query("UPDATE documents SET created_at = NOW() - INTERVAL '2 hours' WHERE upload_state IN ('pending','gone')");
 const q1 = await upload(a, { name: "quota1.bin", type: "application/octet-stream", size: 600 * 1024 });
 assert.equal(q1.done.status, 200);
 assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "quota2.bin", content_type: "application/octet-stream", size: 600 * 1024 } })).status, 413); ok("the project-wide storage limit is enforced");
 await request(`/api/docs/${q1.id}`, { method: "DELETE", cookie: a });
+// A just-deleted file keeps counting toward the limit until its presigned PUT has surely expired, so a re-PUT cannot sneak in uncounted.
+assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "quota3.bin", content_type: "application/octet-stream", size: 600 * 1024 } })).status, 413); ok("a just-deleted file still counts toward the limit");
+await backdate(q1.id);
+const afterSweep = await upload(a, { name: "quota4.bin", type: "application/octet-stream", size: 600 * 1024, complete: false });
+assert.equal(afterSweep.start.status, 200); ok("the sweep frees an old deleted file's space");
+assert.equal((await request(`/api/docs/${afterSweep.id}`, { method: "DELETE", cookie: a })).status, 404); ok("a pending upload cannot be deleted through the API");
+assert.equal((await request(`/api/docs/${afterSweep.id}/complete`, { method: "POST", cookie: a })).status, 200);
+const orphanStart = await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "orphan.bin", content_type: "application/octet-stream", size: 64 } });
+assert.equal((await request(`/api/docs/${orphanStart.body.id}/complete`, { method: "POST", cookie: a })).status, 422);
+const lateKey = orphanStart.body.upload_url.split("?")[0];
+assert.equal((await fetch(orphanStart.body.upload_url, { method: "PUT", headers: orphanStart.body.headers, body: new Uint8Array(64) })).ok, true);
+assert.equal((await request(`/api/docs/${afterSweep.id}`, { method: "DELETE", cookie: a })).status, 204);
+assert.equal((await request("/api/docs/uploads", { method: "POST", cookie: a, body: { file_name: "quota5.bin", content_type: "application/octet-stream", size: 600 * 1024 } })).status, 413); ok("a failed upload and a fresh delete keep their space reserved");
+await backdate(orphanStart.body.id); await backdate(afterSweep.id);
+const swept = await upload(a, { name: "quota6.bin", type: "application/octet-stream", size: 16 });
+assert.equal(swept.done.status, 200);
+assert.equal((await s3.fetch(lateKey, { method: "HEAD" })).status, 404); ok("the sweep deletes an object PUT after its upload failed");
+await request(`/api/docs/${swept.id}`, { method: "DELETE", cookie: a });
 
 assert.equal((await request(`/api/docs/${pdf.id}`, { method: "PATCH", cookie: a, body: { body: "x" } })).status, 422); ok("a file doc's content cannot be replaced by text");
 assert.equal((await request(`/api/docs/${pdf.id}`, { method: "DELETE", cookie: a })).status, 204);
@@ -188,5 +210,11 @@ assert.equal((await tool(tB2, "get_doc", { id: made.data.id })).isError, true); 
 assert.equal((await tool(tB2, "delete_doc", { id: made.data.id })).isError, true); ok("another workspace's token cannot delete the doc");
 assert.equal((await tool(tA, "delete_doc", { id: made.data.id })).isError, false);
 assert.equal((await tool(tA, "get_doc", { id: made.data.id })).isError, true); ok("delete_doc removes the doc");
+
+// 7. Text writes are rate limited (60/min per user) so one account cannot fill the shared database.
+let limited = 0;
+for (let i = 1; i <= 70 && !limited; i++) { const r = await request("/api/docs", { method: "POST", cookie: a, body: { kind: "other", title: `rate ${i}`, format: "markdown", body: "x" } }); if (r.status === 429) limited = i; }
+assert.ok(limited > 0 && limited <= 61, `limited at ${limited}`); ok("creating text docs is rate limited");
+await pg.end();
 
 console.log(`\n${passed} checks passed.`);

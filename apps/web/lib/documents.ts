@@ -17,6 +17,8 @@ export function initDocs() {
     CREATE TABLE IF NOT EXISTS document_papers (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE, PRIMARY KEY (document_id, paper_id));
     CREATE TABLE IF NOT EXISTS document_runs (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, run_id INTEGER NOT NULL REFERENCES experiment_runs(id) ON DELETE CASCADE, PRIMARY KEY (document_id, run_id));
     -- RLS without policies keeps Supabase's public Data API out; the owning role used here bypasses it.
+    -- 'gone' = deleted or failed upload whose presigned PUT may still be used: hidden, still counted, swept after 1 hour.
+    ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_upload_state_check; ALTER TABLE documents ADD CONSTRAINT documents_upload_state_check CHECK (upload_state IN ('pending','ready','gone'));
     ALTER TABLE documents ENABLE ROW LEVEL SECURITY; ALTER TABLE document_papers ENABLE ROW LEVEL SECURITY; ALTER TABLE document_runs ENABLE ROW LEVEL SECURITY`); })().catch(err => { ready = undefined; throw err; });
   return ready;
 }
@@ -105,6 +107,7 @@ export async function getDoc(s: Scope, idRaw: unknown) {
 export async function createTextDoc(s: Scope, via: "web" | "api", f: Record<string, unknown>) {
   await initDocs();
   const b = baseFields(f), format = textFormat(f.format), body = bodyOf(f.body ?? "");
+  await rateLimit(s.userId, "doc-write", 60, 60);
   await assertRoom(s);
   const id = await tx(async c => {
     const id = (await c.query("INSERT INTO documents (workspace_id, owner_id, kind, title, status, format, body, tags, created_via, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$2) RETURNING id", [s.workspaceId, s.userId, b.kind, b.title, b.status, format, body, b.tags, via])).rows[0].id as number;
@@ -118,6 +121,7 @@ export async function createTextDoc(s: Scope, via: "web" | "api", f: Record<stri
 export async function updateDoc(s: Scope, idRaw: unknown, f: Record<string, unknown>) {
   await initDocs();
   const id = docId(idRaw), cur = await row(s, id);
+  await rateLimit(s.userId, "doc-write", 60, 60);
   const kind = f.kind === undefined ? cur.kind : kindOf(f.kind);
   let status = kind === "idea" ? (cur.status ?? "new") : null;
   if (f.status !== undefined) { if (kind !== "idea") { if (f.status !== null) throw new AppError(422, "Chỉ ý tưởng mới có trạng thái."); } else status = statusOf(f.status); }
@@ -134,10 +138,12 @@ export async function updateDoc(s: Scope, idRaw: unknown, f: Record<string, unkn
 export async function deleteDoc(s: Scope, idRaw: unknown) {
   await initDocs();
   const id = docId(idRaw);
-  const r = (await db.query("SELECT owner_id, file_key FROM documents WHERE id=$1 AND workspace_id=$2", [id, s.workspaceId])).rows[0];
+  const r = (await db.query("SELECT owner_id, file_key, created_at > NOW() - INTERVAL '15 minutes' AS young FROM documents WHERE id=$1 AND workspace_id=$2 AND (upload_state IS NULL OR upload_state='ready')", [id, s.workspaceId])).rows[0];
   if (!r) throw new AppError(404, "Không tìm thấy tài liệu.");
   if (!canManage(s, r.owner_id)) throw new AppError(403, "Chỉ người tạo tài liệu hoặc quản trị workspace mới được xóa.");
-  await db.query("DELETE FROM documents WHERE id=$1", [id]);
+  // A file younger than its presigned PUT (10 min) could be re-uploaded after deletion; keep it as a counted tombstone until the sweep.
+  if (r.file_key && r.young) await db.query("UPDATE documents SET upload_state='gone' WHERE id=$1", [id]);
+  else await db.query("DELETE FROM documents WHERE id=$1", [id]);
   return { file_key: r.file_key as string | null };
 }
 
@@ -155,7 +161,7 @@ export async function startUpload(s: Scope, via: "web" | "api", f: Record<string
   const b = baseFields({ ...f, kind: f.kind ?? "other", title: f.title ?? fileName.slice(0, MAX_TITLE) });
   await rateLimit(s.userId, "doc-upload", 30, 60);
   // Uploads abandoned for over an hour are swept here, so they stop counting toward the limit.
-  for (const old of (await db.query("DELETE FROM documents WHERE upload_state='pending' AND created_at < NOW() - INTERVAL '1 hour' RETURNING file_key")).rows) void dropObject(old.file_key);
+  for (const old of (await db.query("DELETE FROM documents WHERE upload_state IN ('pending','gone') AND created_at < NOW() - INTERVAL '1 hour' RETURNING file_key")).rows) void dropObject(old.file_key);
   await assertRoom(s);
   const used = Number((await db.query("SELECT COALESCE(SUM(file_size),0)::float8 AS n FROM documents")).rows[0].n);
   if (used + size > storageLimit()) throw new AppError(413, "Kho file đã gần đầy; hãy xóa bớt file cũ.");
@@ -178,7 +184,7 @@ export async function completeUpload(s: Scope, idRaw: unknown) {
   const head = await headObject(r.file_key);
   if (!head || head.size !== r.file_size || head.contentType !== r.file_type) {
     if (head) await dropObject(r.file_key);
-    await db.query("DELETE FROM documents WHERE id=$1", [id]);
+    await db.query("UPDATE documents SET upload_state='gone' WHERE id=$1", [id]);
     throw new AppError(422, head ? "File đã tải lên không khớp dung lượng hoặc loại đã khai báo." : "Chưa thấy file trên kho; hãy upload lại.");
   }
   await db.query("UPDATE documents SET upload_state='ready', updated_at=NOW() WHERE id=$1", [id]);
