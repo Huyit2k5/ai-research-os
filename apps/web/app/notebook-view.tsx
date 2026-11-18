@@ -23,7 +23,7 @@ function inline(text: string) {
   return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => i % 2 === 0 ? part : part.startsWith("**") ? <b key={i}>{part.slice(2, -2)}</b> : <code key={i} className="nb-inline">{part.slice(1, -1)}</code>);
 }
 const cellsOf = (row: string) => row.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
-function Markdown({ src }: { src: string }) {
+export function Markdown({ src }: { src: string }) {
   const out: React.ReactNode[] = [];
   src.split(/(```[\s\S]*?```)/g).forEach((block, i) => {
     if (block.startsWith("```")) { out.push(<pre key={i} className="nb-md-code">{block.replace(/^```\w*\n?|```$/g, "")}</pre>); return; }

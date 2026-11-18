@@ -135,6 +135,9 @@ for (const [name, type, mode] of [["x.svg", "image/svg+xml", "attachment"], ["x.
   await request(`/api/docs/${u.id}`, { method: "DELETE", cookie: a });
 }
 ok("only PDF, raster images and HTML are inline; SVG and Word are attachments");
+const viHtml = await upload(a, { name: "vi.html", type: "text/html", size: 16 });
+assert.equal((await fetch((await request(`/api/docs/${viHtml.id}/file`, { cookie: a })).headers.get("location"))).headers.get("content-type"), "text/html; charset=utf-8"); ok("text files are served as UTF-8 so Vietnamese without <meta charset> renders");
+await request(`/api/docs/${viHtml.id}`, { method: "DELETE", cookie: a });
 const noType = await upload(a, { name: "data.bin", type: "", size: 8, putType: "application/octet-stream" });
 assert.equal(noType.done.status, 200); assert.equal(noType.done.body.file_type, "application/octet-stream"); ok("a missing content type becomes application/octet-stream");
 await request(`/api/docs/${noType.id}`, { method: "DELETE", cookie: a });

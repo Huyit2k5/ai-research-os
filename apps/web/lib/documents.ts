@@ -190,7 +190,9 @@ export async function fileUrl(s: Scope, idRaw: unknown, download: boolean) {
   await initDocs();
   const r = (await db.query("SELECT file_key, file_name, file_type FROM documents WHERE id=$1 AND workspace_id=$2 AND format='file' AND upload_state='ready'", [docId(idRaw), s.workspaceId])).rows[0];
   if (!r) throw new AppError(404, "Không tìm thấy file.");
-  return presignGet(r.file_key, { fileName: r.file_name, contentType: r.file_type, inline: !download && INLINE_TYPES.includes(r.file_type) });
+  // Browsers guess a legacy charset for text without one, garbling Vietnamese; UTF-8 is what our users and AI tools write.
+  const contentType = r.file_type.startsWith("text/") ? `${r.file_type}; charset=utf-8` : r.file_type;
+  return presignGet(r.file_key, { fileName: r.file_name, contentType, inline: !download && INLINE_TYPES.includes(r.file_type) });
 }
 
 /** Deletes the row, then the stored file (a failed object delete only leaves an orphan, it never blocks the user). */
