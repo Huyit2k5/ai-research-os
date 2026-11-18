@@ -155,6 +155,23 @@ if (process.env.RUNREQ_TEST_DB) {
   await client.query("UPDATE run_requests SET status='pending', version=NULL WHERE id=$1", [toApprove]); await client.end();
 } else console.log("  - running status skipped (set RUNREQ_TEST_DB)");
 
+// 8b. MCP tools
+const names = (await mcp(tA, "tools/list", {})).body.result.tools.map(t => t.name);
+for (const n of ["push_notebook", "list_run_requests", "get_run_request", "cancel_run_request"]) assert.ok(names.includes(n), n);
+assert.ok(!names.some(n => /approve|reject|run_now/.test(n))); ok("MCP lists the 4 run-request tools and no approve/reject tool");
+const pushed = await tool(tA, "push_notebook", { account_id: accountA, ref: "runreq/lora-exp", kernel_type: "script", code: "print('mcp')", machine: "cpu", summary: "Qua MCP", idea_id: idea.id });
+assert.equal(pushed.isError, false, pushed.text); assert.equal(pushed.data.status, "pending"); assert.match(pushed.data.review_url, new RegExp(`/run-requests/${pushed.data.id}$`)); aCreated++;
+assert.equal((await request(`/api/run-requests/${pushed.data.id}`, { cookie: a })).body.requested_via, "mcp"); ok("push_notebook creates a pending request via mcp with a review link");
+await request(`/api/run-requests/${pushed.data.id}/reject`, { method: "POST", cookie: c, body: { note: "Đổi lr" } });
+const got = await tool(tA, "get_run_request", { id: pushed.data.id });
+assert.equal(got.data.status, "rejected"); assert.equal(got.data.review_note, "Đổi lr"); assert.equal(got.data.code, "print('mcp')"); ok("get_run_request shows the reviewer's note and the code");
+const listed = await tool(tA, "list_run_requests", { status: "rejected", idea_id: idea.id });
+assert.ok(listed.data.items.some(r => r.id === pushed.data.id)); ok("list_run_requests filters by status and idea");
+const cOwn = await tool(tC, "push_notebook", { account_id: accountA, ref: "runreq/lora-exp", kernel_type: "script", code: "print(2)" }); cCreated++;
+assert.equal((await tool(tC, "cancel_run_request", { id: (await make(tA)).body.id })).isError, true); ok("cancel_run_request refuses another member's request");
+assert.equal((await tool(tC, "cancel_run_request", { id: cOwn.data.id })).data.status, "cancelled"); ok("cancel_run_request cancels your own request");
+assert.equal((await tool(tA, "push_notebook", { account_id: accountA, ref: "runreq/lora-exp", code: "x", machine: "a100" })).isError, true); ok("push_notebook surfaces validation errors");
+
 // 9. Pending cap (keep last: it fills the workspace with 50 pending requests)
 const pendingNow = (await request("/api/run-requests?status=pending&limit=1", { cookie: a })).body.pending;
 for (let n = pendingNow; n < 50; n++) { const r = aCreated < 30 ? await make(tA) : await make(tC); assert.equal(r.status, 201, `fill ${n}: ${r.text}`); }
