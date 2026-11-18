@@ -154,3 +154,9 @@ div.pl-by{margin:-2px 0 8px}
 .pl-body{min-width:0}
 .pl-list-panel .panel-heading{flex-wrap:wrap;gap:10px}
 .pl-list-panel .panel-heading>div:first-child{flex:1 1 240px;min-width:0}
+/* Filter grid: equal columns, selects fill their cell, rows align even if a label wraps */
+.pl-grid2{grid-template-columns:repeat(2,minmax(0,1fr));align-items:end}
+.pl-toolbar label{min-width:0}
+.pl-toolbar select{width:100%;min-width:0}
+.pl-grid2 label{justify-content:flex-end}
+.pl-list-panel .panel-heading p{line-height:1.5;margin-top:4px}
