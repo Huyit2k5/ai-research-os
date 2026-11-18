@@ -175,14 +175,14 @@ export async function captureRunFor(s: Scope, accountIdRaw: unknown, ref: unknow
   return captureRun(s, account, String(ref ?? ""), { version: v, force: opts.force });
 }
 
-export type RunListOpts = { q?: string; ref?: string; tag?: string; status?: string; source?: string; sort?: string; metric?: string; order?: string; limit?: number; offset?: number };
+export type RunListOpts = { q?: string; ref?: string; tag?: string; status?: string; source?: string; account?: number; sort?: string; metric?: string; order?: string; limit?: number; offset?: number };
 export async function listRuns(s: Scope, o: RunListOpts = {}) {
   await initExperiments();
   const q = (o.q ?? "").trim().slice(0, 200), limit = Math.min(Math.max(Math.trunc(o.limit ?? 50) || 50, 1), 200), offset = Math.max(Math.trunc(o.offset ?? 0) || 0, 0);
   const metric = clip(o.metric, 100), dir = o.order === "asc" ? "ASC" : "DESC";
-  const where = "workspace_id=$1 AND ($2='' OR name ILIKE '%'||$2||'%' OR ref ILIKE '%'||$2||'%' OR notes ILIKE '%'||$2||'%') AND ($3::text IS NULL OR ref=$3) AND ($4::text IS NULL OR $4=ANY(tags)) AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR source=$6)";
-  const params = [s.workspaceId, q, clip(o.ref, 200), clip(o.tag, 40), clip(o.status, 30), clip(o.source, 20)];
-  const order = o.sort === "metric" && metric ? `CASE WHEN jsonb_typeof(metrics->$7)='number' THEN (metrics->>$7)::float8 END ${dir} NULLS LAST, id DESC` : o.sort === "oldest" ? "COALESCE(run_at, created_at) ASC, id ASC" : "COALESCE(run_at, created_at) DESC, id DESC";
+  const where = "workspace_id=$1 AND ($2='' OR name ILIKE '%'||$2||'%' OR ref ILIKE '%'||$2||'%' OR notes ILIKE '%'||$2||'%') AND ($3::text IS NULL OR ref=$3) AND ($4::text IS NULL OR $4=ANY(tags)) AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR source=$6) AND ($7::int IS NULL OR account_id=$7)";
+  const params = [s.workspaceId, q, clip(o.ref, 200), clip(o.tag, 40), clip(o.status, 30), clip(o.source, 20), Number.isInteger(o.account) && o.account! > 0 && o.account! <= 2147483647 ? o.account : null];
+  const order = o.sort === "metric" && metric ? `CASE WHEN jsonb_typeof(metrics->$8)='number' THEN (metrics->>$8)::float8 END ${dir} NULLS LAST, id DESC` : o.sort === "oldest" ? "COALESCE(run_at, created_at) ASC, id ASC" : "COALESCE(run_at, created_at) DESC, id DESC";
   const all = metric && o.sort === "metric" ? [...params, metric] : params;
   const [items, total] = await Promise.all([db.query(`SELECT ${LIST_FIELDS} FROM experiment_runs WHERE ${where} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`, all), db.query(`SELECT COUNT(*) FROM experiment_runs WHERE ${where}`, params)]);
   return { total: Number(total.rows[0].count), offset, limit, items: items.rows.map(r => shape(s, r)) };
