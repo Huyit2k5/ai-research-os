@@ -6,6 +6,9 @@ import type { Account, SyncData } from "./connector-screens";
 
 type Selection = { account: Account; ref: string; title: string };
 type LogResult = { ref: string; content: string; truncated: boolean; fetched_at: string };
+type RunStatus = { status: string; failure_message: string; fetched_at: string; run?: { id: number; created: boolean; captured_from: string } | null; capture_error?: string };
+const STATUS_LABEL: Record<string, string> = { queued: "Đang chờ", running: "Đang chạy", complete: "Hoàn tất", error: "Lỗi", cancel_requested: "Đang hủy", cancel_acknowledged: "Đã hủy", unknown: "Không rõ" };
+const ACTIVE = new Set(["queued", "running", "cancel_requested"]);
 const API = "";
 
 function formatLog(content: string) {
@@ -31,6 +34,26 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
   const liveController = useRef<AbortController | null>(null);
   const liveSize = useRef(0);
   const requestId = useRef(0);
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [statusError, setStatusError] = useState("");
+  useEffect(() => {
+    if (!selection) return;
+    let cancelled = false, timer: ReturnType<typeof setTimeout> | undefined;
+    setRunStatus(null); setStatusError("");
+    async function poll() {
+      let active = true;
+      try {
+        const response = await fetch(`${API}/api/accounts/${selection!.account.id}/notebook-status?ref=${encodeURIComponent(selection!.ref)}`, { cache: "no-store" });
+        const body = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) { setStatusError(typeof body.detail === "string" ? body.detail : "Không thể lấy trạng thái chạy."); active = false; }
+        else { setRunStatus(body as RunStatus); setStatusError(""); active = ACTIVE.has((body as RunStatus).status); }
+      } catch { if (!cancelled) { setStatusError("Không thể lấy trạng thái chạy."); active = false; } }
+      if (!cancelled && active) timer = setTimeout(() => void poll(), 10000);
+    }
+    void poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [selection]);
   useEffect(() => () => { liveController.current?.abort(); requestId.current++; }, []);
   const notebooks = accounts.flatMap(account => (data[account.id]?.notebooks ?? []).flatMap(item => {
     const ref = typeof item.ref === "string" ? item.ref : "";
@@ -93,6 +116,9 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
       {notebooks.length === 0 && <div className="empty screen-empty"><div className="empty-icon"><BookOpen size={23}/></div><h3>Chưa có notebook</h3><p>Đồng bộ tài khoản để tải danh sách notebook vào phiên làm việc.</p><button className="secondary" onClick={navigate}>Đến trang đồng bộ</button></div>}
       {notebooks.length > 0 && filtered.length === 0 && <div className="empty">Không tìm thấy notebook phù hợp.</div>}</div></section>
       <section className="panel log-viewer"><div className="panel-heading"><div><h2>{selection?.title ?? "Trình xem logs"}</h2><p>{selection ? `${selection.account.label} · ${selection.ref}` : "Chọn một notebook từ danh sách."}</p></div>{selection && <button className="secondary" disabled={loading} onClick={() => void load(selection)}><RefreshCw size={15}/> Làm mới</button>}</div>
+      {selection && <div className="log-meta" aria-live="polite"><b>Trạng thái chạy: </b>{statusError ? statusError : runStatus ? `${STATUS_LABEL[runStatus.status] ?? runStatus.status}${runStatus.failure_message ? ` — ${runStatus.failure_message}` : ""}${ACTIVE.has(runStatus.status) ? " (tự cập nhật mỗi 10 giây)" : ""}` : "Đang tải..."}</div>}
+      {runStatus?.run && <div className="log-meta rn-log-saved" role="status">Đã lưu kết quả run #{runStatus.run.id} vào Thí nghiệm</div>}
+      {runStatus?.capture_error && <div className="log-meta rn-log-warn">{runStatus.capture_error}</div>}
       {selection && <div className="log-controls"><button className="secondary" disabled={loading} onClick={live ? stop : () => void follow()}>{live ? "Dừng theo dõi" : "Theo dõi trực tiếp"}</button><span>{liveStatus}</span></div>}
       {selection && <div className="log-meta">{liveStatus ? (liveTrimmed ? "Chỉ giữ phần logs mới nhất trong trình duyệt." : "") : loading ? "Đang tải logs..." : result ? `Đã tải lúc ${new Date(result.fetched_at).toLocaleString("vi-VN")}` : ""}{!liveStatus && result?.truncated && " · Chỉ hiển thị 256 KB cuối"}</div>}
       {error && <div className="alert error log-alert" role="alert">{error}</div>}

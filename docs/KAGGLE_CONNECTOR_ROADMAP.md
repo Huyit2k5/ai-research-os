@@ -25,7 +25,13 @@ Mục tiêu: xây dựng ứng dụng cá nhân quản lý kết nối Kaggle c�
 - [x] Đồng bộ thủ công quota và danh sách notebook trong phiên trình duyệt.
 - [x] Xem và làm mới logs notebook thủ công.
 - [x] Triển khai luồng logs trực tiếp qua API Kaggle; cần kiểm chứng với notebook đang chạy.
-- [ ] Tích hợp trạng thái chạy và lưu dữ liệu đồng bộ bền vững.
+- [x] Lưu quota và notebook đã đồng bộ vào database (lịch sử quota 90 ngày).
+- [x] Hiển thị trạng thái chạy notebook (GetKernelSessionStatus, tự cập nhật 10 giây khi đang chạy); cần kiểm chứng với notebook thật.
+- [x] Theo dõi experiment: thu run từ output notebook (`ros_run.json` hoặc dòng `@@ROS_CONFIG` / `@@ROS_METRIC` trong log), kèm môi trường và code từ GetKernel (best-effort); tự thu khi trạng thái notebook kết thúc, thu thủ công theo version.
+- [x] Helper `docs/ros_tracker.py` cho notebook và hướng dẫn `docs/EXPERIMENT_TRACKING.md`.
+- [x] Run thủ công (Colab, máy local), sửa tên/ghi chú/tag/paper liên kết, so sánh 2–10 run.
+- [x] Tool MCP cho run: `list_compute_accounts`, `list_runs`, `get_run`, `compare_runs`, `capture_run`, `log_run`, `update_run`, `delete_run`.
+- [ ] Kiểm chứng thu run với notebook Kaggle thật (file output, dòng log khi crash, môi trường và code từ GetKernel).
 - [ ] Đồng bộ định kỳ, retry, giới hạn request và thông báo lỗi.
 - [ ] Kiểm thử end-to-end với Kaggle; sau đó thêm MLflow, biểu đồ và thông báo.
 

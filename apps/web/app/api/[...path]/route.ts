@@ -1,6 +1,6 @@
 import { accountById, AppError, db, decryptToken, encryptToken, initialize, kaggleCall, normalizeQuota } from "../../../lib/server";
-import { auth } from "../../../lib/auth";
-import { randomUUID } from "node:crypto";
+import { captureRun, initExperiments, TERMINAL } from "../../../lib/experiments";
+import { sessionWorkspace } from "../../../lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,15 +69,9 @@ async function handler(req: Request, ctx: Context) {
     if (method !== "GET" && origin && origin !== trustedOrigin) throw new AppError(403, "Nguồn yêu cầu không hợp lệ.");
     if (path[0] === "health" && method === "GET") return json({ status: "ok" });
     if (path[0] !== "accounts" && path[0] !== "workspace") throw new AppError(404, "Không tìm thấy API.");
-    const session = await auth.api.getSession({ headers: req.headers });
-    if (!session) throw new AppError(401, "Vui lòng đăng nhập để tiếp tục.");
-    const ownerId = session.user.id, activeId = session.session.activeOrganizationId ?? "";
-    await initialize();
-    // Use the active workspace while the user is still a member; otherwise fall back to their oldest one, or create a personal one.
-    let workspace: { id: string; name: string; role: string } | undefined = (await db.query('SELECT m."organizationId" AS id, o.name, m.role FROM member m JOIN organization o ON o.id=m."organizationId" WHERE m."userId"=$1 ORDER BY (m."organizationId"=$2) DESC, m."createdAt" LIMIT 1', [ownerId, activeId])).rows[0];
-    // shortcut: parallel first requests from a user with no workspace can each create one; harmless (they can leave the extra), add a per-user lock if it shows up.
-    if (!workspace) workspace = { id: (await auth.api.createOrganization({ body: { name: "Cá nhân", slug: `ca-nhan-${randomUUID()}` }, headers: req.headers })).id, name: "Cá nhân", role: "owner" };
-    else if (workspace.id !== activeId) await db.query('UPDATE session SET "activeOrganizationId"=$1 WHERE id=$2', [workspace.id, session.session.id]);
+    await initialize(); await initExperiments();
+    // Shared resolver (lib/workspace.ts): active workspace while still a member, else oldest, else a new personal one.
+    const scope = await sessionWorkspace(req), ownerId = scope.userId, workspace = { id: scope.workspaceId, name: scope.workspaceName, role: scope.role };
     if (path[0] === "workspace") { if (path.length === 1 && method === "GET") return json(workspace); throw new AppError(404, "Không tìm thấy API."); }
     // Only the first registered user can claim connections created before login was added.
     await db.query('UPDATE compute_accounts SET owner_id=$1, workspace_id=$2 WHERE owner_id IS NULL AND $1=(SELECT id FROM "user" ORDER BY "createdAt", id LIMIT 1)', [ownerId, workspace.id]);
@@ -101,9 +95,30 @@ async function handler(req: Request, ctx: Context) {
       let quota = null, notebooks = null, notebooks_truncated = false;
       try { quota = normalizeQuota(await kaggleCall(token, "GetAcceleratorQuotaStatistics", {})); } catch (e) { errors.quota = message(e).message; }
       try { const out = await kaggleCall(token, "ListKernels", { group: "PROFILE", pageSize: 100, language: "all", kernelType: "all", outputType: "all", sortBy: "HOTNESS" }); notebooks = Array.isArray(out.kernels) ? out.kernels : []; notebooks_truncated = Boolean(out.nextPageToken); } catch (e) { errors.notebooks = message(e).message; }
-      return json({ synced_at: new Date().toISOString(), quota, notebooks, notebooks_truncated, errors });
+      const syncedAt = new Date().toISOString();
+      // A failed half keeps the previously stored data instead of erasing it.
+      if (quota || notebooks) await db.query(
+        `INSERT INTO account_sync (account_id, synced_at, quota, notebooks, notebooks_truncated, errors) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (account_id) DO UPDATE SET synced_at=EXCLUDED.synced_at, quota=COALESCE(EXCLUDED.quota, account_sync.quota), notebooks=COALESCE(EXCLUDED.notebooks, account_sync.notebooks), notebooks_truncated=CASE WHEN EXCLUDED.notebooks IS NULL THEN account_sync.notebooks_truncated ELSE EXCLUDED.notebooks_truncated END, errors=EXCLUDED.errors`,
+        [account.id, syncedAt, quota ? JSON.stringify(quota) : null, notebooks ? JSON.stringify(notebooks) : null, notebooks_truncated, JSON.stringify(errors)]);
+      if (quota) { await db.query("INSERT INTO quota_snapshots (account_id, quota) VALUES ($1,$2)", [account.id, JSON.stringify(quota)]); await db.query("DELETE FROM quota_snapshots WHERE account_id=$1 AND captured_at < NOW() - INTERVAL '90 days'", [account.id]); }
+      const saved = (await db.query("SELECT synced_at, quota, notebooks, notebooks_truncated FROM account_sync WHERE account_id=$1", [account.id])).rows[0];
+      return json({ synced_at: saved?.synced_at ?? syncedAt, quota: saved?.quota ?? null, notebooks: saved?.notebooks ?? null, notebooks_truncated: saved?.notebooks_truncated ?? false, errors });
+    }
+    if (path[2] === "sync" && method === "GET") {
+      const saved = (await db.query("SELECT synced_at, quota, notebooks, notebooks_truncated, errors FROM account_sync WHERE account_id=$1", [account.id])).rows[0];
+      return json(saved ?? null);
     }
     if (path[2] === "notebook-logs" && method === "GET") { const ref = validateRef(req), [userName, kernelSlug, versionLabel] = ref.split("/"); const result = await kaggleCall(decryptToken(account.credential), "ListKernelSessionOutput", { userName, kernelSlug, ...(versionLabel ? { versionLabel } : {}) }); const bytes = Buffer.from(typeof result.log === "string" ? result.log : "", "utf8"), limit = 256 * 1024; return json({ ref, content: bytes.subarray(-limit).toString("utf8").trim(), truncated: bytes.length > limit, fetched_at: new Date().toISOString() }); }
+    if (path[2] === "notebook-status" && method === "GET") {
+      const [userName, kernelSlug] = validateRef(req).split("/");
+      const result = await kaggleCall(decryptToken(account.credential), "GetKernelSessionStatus", { userName, kernelSlug });
+      const raw = typeof result.status === "string" ? result.status : "", status = raw.replace(/^KERNEL_WORKER_STATUS_/, "").toLowerCase() || "unknown", failure_message = typeof result.failureMessage === "string" ? result.failureMessage : "";
+      // A finished session is captured into experiment_runs automatically; capture errors never break the status response.
+      let run: { id: number; created: boolean; captured_from: unknown } | null = null, capture_error = "";
+      if (TERMINAL.has(status)) { try { const c = await captureRun(scope, account,`${userName}/${kernelSlug}`, { status, failureMessage: failure_message }); if (!c.skipped) run = { id: c.run.id, created: c.created, captured_from: c.run.captured_from }; } catch (e) { capture_error = message(e).message; } }
+      return json({ status, failure_message, fetched_at: new Date().toISOString(), run, capture_error });
+    }
     if (path[2] === "notebook-logs-stream" && method === "GET") return await streamLogs(req, decryptToken(account.credential), validateRef(req));
     throw new AppError(404, "Không tìm thấy API.");
   } catch (error) { const e = message(error); return json({ detail: e.message }, e.status); }

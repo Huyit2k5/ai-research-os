@@ -23,6 +23,7 @@ try {
     const workspace = await auth.api.createOrganization({ body: { name: "Cá nhân", slug: `ca-nhan-${randomUUID()}`, userId: owner_id } });
     await lock.query("UPDATE compute_accounts SET workspace_id=$1 WHERE owner_id=$2 AND workspace_id IS NULL", [workspace.id, owner_id]);
   }
+  await lock.query(`CREATE TABLE IF NOT EXISTS account_sync (account_id INTEGER PRIMARY KEY REFERENCES compute_accounts(id) ON DELETE CASCADE, synced_at TIMESTAMPTZ NOT NULL, quota JSONB, notebooks JSONB, notebooks_truncated BOOLEAN NOT NULL DEFAULT FALSE, errors JSONB NOT NULL DEFAULT '{}'::jsonb); CREATE TABLE IF NOT EXISTS quota_snapshots (id BIGSERIAL PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES compute_accounts(id) ON DELETE CASCADE, captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), quota JSONB NOT NULL); CREATE INDEX IF NOT EXISTS quota_snapshots_account_idx ON quota_snapshots(account_id, captured_at DESC); ALTER TABLE account_sync ENABLE ROW LEVEL SECURITY; ALTER TABLE quota_snapshots ENABLE ROW LEVEL SECURITY`);
   // Supabase exposes public tables through its Data API; RLS without policies blocks it, while this owning role bypasses RLS.
   for (const table of ["user", "session", "account", "verification", "organization", "member", "invitation", "compute_accounts"]) await lock.query(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
 } finally {
