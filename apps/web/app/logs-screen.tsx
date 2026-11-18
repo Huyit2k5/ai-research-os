@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BookOpen, RefreshCw, Search, TerminalSquare } from "lucide-react";
 import type { Account, SyncData } from "./connector-screens";
+import { formatLog, useLiveLog } from "./live-log";
 
 // version: a past notebook version to read (undefined = latest session); latest: currentVersionNumber from the synced list, when Kaggle sends it.
 type Selection = { account: Account; ref: string; title: string; latest?: number; version?: number };
@@ -12,15 +13,6 @@ const STATUS_LABEL: Record<string, string> = { queued: "Đang chờ", running: "
 const ACTIVE = new Set(["queued", "running", "cancel_requested"]);
 const API = "";
 
-function formatLog(content: string) {
-  try {
-    const parsed: unknown = JSON.parse(content);
-    if (Array.isArray(parsed) && parsed.every(item => typeof item === "object" && item !== null && "data" in item)) {
-      return parsed.map(item => `${item.time ? `[${String(item.time)}] ` : ""}${String(item.data ?? "")}`).join("\n");
-    }
-  } catch { /* Plain text and truncated JSON remain readable as returned. */ }
-  return content;
-}
 
 export default function LogsScreen({ accounts, data, navigate }: { accounts: Account[]; data: Record<number, SyncData>; navigate: () => void }) {
   const [selection, setSelection] = useState<Selection | null>(null);
@@ -28,12 +20,7 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
   const [query, setQuery] = useState(""); const [accountFilter, setAccountFilter] = useState(""); const [notebookFilter, setNotebookFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [live, setLive] = useState(false);
-  const [liveText, setLiveText] = useState("");
-  const [liveStatus, setLiveStatus] = useState("");
-  const [liveTrimmed, setLiveTrimmed] = useState(false);
-  const liveController = useRef<AbortController | null>(null);
-  const liveSize = useRef(0);
+  const stream = useLiveLog(setError), { live, text: liveText, status: liveStatus, trimmed: liveTrimmed } = stream;
   const requestId = useRef(0);
   const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
   const [statusError, setStatusError] = useState("");
@@ -55,7 +42,7 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
     void poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [selection]);
-  useEffect(() => () => { liveController.current?.abort(); requestId.current++; }, []);
+  useEffect(() => () => { requestId.current++; }, []);
   const notebooks = accounts.flatMap(account => (data[account.id]?.notebooks ?? []).flatMap(item => {
     const ref = typeof item.ref === "string" ? item.ref : "";
     if (!/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(ref)) return [];
@@ -73,7 +60,7 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
 
   async function load(item: Selection) {
     const id = ++requestId.current;
-    liveController.current?.abort(); liveController.current = null; setLive(false); setLiveText(""); setLiveStatus(""); setLiveTrimmed(false);
+    stream.reset();
     setSelection(item); setResult(null); setError(""); setLoading(true);
     try {
       const response = await fetch(`${API}/api/accounts/${item.account.id}/notebook-logs?ref=${encodeURIComponent(item.version ? `${item.ref}/${item.version}` : item.ref)}`, { cache: "no-store" });
@@ -88,33 +75,8 @@ export default function LogsScreen({ accounts, data, navigate }: { accounts: Acc
     } finally { if (id === requestId.current) setLoading(false); }
   }
 
-  async function follow() {
-    if (!selection || liveController.current) return;
-    const controller = new AbortController(); liveController.current = controller;
-    setLive(true); setLiveText(""); setLiveTrimmed(false); liveSize.current = 0; setError(""); setLiveStatus("Đang kết nối Kaggle...");
-    try {
-      const response = await fetch(`${API}/api/accounts/${selection.account.id}/notebook-logs-stream?ref=${encodeURIComponent(selection.ref)}`, { signal: controller.signal, cache: "no-store" });
-      if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(typeof body.detail === "string" ? body.detail : "Không thể mở luồng logs. Hãy thử lại."); }
-      if (!response.body) throw new Error("Không thể mở luồng logs. Hãy thử lại.");
-      const reader = response.body.getReader(), decoder = new TextDecoder(); let pending = "";
-      while (true) {
-        const { value, done } = await reader.read(); if (done) break;
-        pending += decoder.decode(value, { stream: true });
-        let end: number;
-        while ((end = pending.indexOf("\n\n")) !== -1) {
-          const event = pending.slice(0, end); pending = pending.slice(end + 2);
-          const kind = event.match(/^event: (.+)$/m)?.[1], raw = event.match(/^data: (.+)$/m)?.[1];
-          if (!raw) continue;
-          const payload = JSON.parse(raw) as { text?: string; message?: string };
-          if (kind === "log" && payload.text) { const text = payload.text; liveSize.current += text.length; if (liveSize.current > 256 * 1024) setLiveTrimmed(true); setLiveStatus("Đang theo dõi trực tiếp"); setLiveText(old => (old + text).slice(-256 * 1024)); }
-          if (kind === "status" || kind === "done") setLiveStatus(payload.message || "");
-          if (kind === "error") { setError(payload.message || "Không thể theo dõi logs."); setLiveStatus(""); }
-        }
-      }
-    } catch (err) { if (!controller.signal.aborted) { setLiveStatus(""); setError(err instanceof Error ? err.message : "Không thể theo dõi logs."); } }
-    finally { if (liveController.current === controller) { liveController.current = null; setLive(false); } }
-  }
-  function stop() { liveController.current?.abort(); liveController.current = null; setLive(false); setLiveStatus("Đã dừng theo dõi."); }
+  function follow() { if (!selection || live) return; setError(""); void stream.follow(selection.account.id, selection.ref); }
+  const stop = stream.stop;
 
   return <>
     <div className="heading screen-heading"><div><div className="eyebrow"><span /> THEO DÕI</div><h1>Logs & hoạt động</h1><p>Chọn notebook để xem logs của phiên gần nhất trên Kaggle.</p></div></div>
