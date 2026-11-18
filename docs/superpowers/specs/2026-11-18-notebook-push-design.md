@@ -63,6 +63,14 @@ Người dùng chọn A.
 
 Phản hồi mong đợi: `ref`, `url`, `versionNumber`, `error`, `invalid*`. **Chưa kiểm chứng với tài khoản thật**: bước đầu tiên của plan là một lần gọi thật để xác nhận tên trường, định dạng `slug`, cách bật GPU (`enableGpu` + `machineShape`) và việc bỏ trống danh sách nguồn có xóa nguồn cũ không.
 
+**Đã kiểm chứng (2026-11-18, `scripts/kaggle-push-check.mjs`, notebook riêng tư `ros-push-check`, 3 version CPU):**
+- Tạo mới: gửi `newTitle` (không `slug`) → phản hồi `{ ref: "/code/<owner>/<slug>", url, versionNumber: 1, kernelId }`. `ref` có tiền tố `/code/`, phải bỏ đi.
+- Version mới cho notebook có sẵn: `slug: "<owner>/<slug>"` → `versionNumber` tăng dần. Trạng thái chạy qua `GetKernelSessionStatus` (RUNNING → COMPLETE).
+- `GetKernel().metadata` có `ref, title, slug, language, kernelType, isPrivate, enableGpu, enableInternet, enableTpu, currentVersionNumber, dockerImage, machineShape` và `datasetDataSources` (chỉ khi có). CPU trả `machineShape: "None"`.
+- **Bỏ trống `datasetDataSources` khi đẩy version mới thì Kaggle XÓA dataset đã gắn** (v2 có `uciml/iris`, v3 không gửi → mất). Vì vậy kế thừa là bắt buộc.
+- Token KGAT_ bị thu hồi trả 401 cho cả lệnh đọc; app nên báo "token hết hạn" thay vì lỗi chung.
+- Chưa kiểm chứng: `machineShape` GPU (`NvidiaTeslaT4`) — không chạy GPU để khỏi tốn quota; kiểm ở lần chạy thật cuối cùng (Task 9).
+
 **Kế thừa cấu hình:** với notebook có sẵn, app gọi `GetKernel` lấy metadata version hiện tại. Trường nào yêu cầu không ghi rõ thì lấy từ metadata đó (nguồn dữ liệu, GPU, internet, private, kernelType). Không bao giờ gửi danh sách nguồn rỗng thay cho "không đổi".
 
 ## 5. Dữ liệu
