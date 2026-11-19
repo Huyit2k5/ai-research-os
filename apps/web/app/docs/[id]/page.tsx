@@ -3,7 +3,8 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { Download, FileText, Pencil, Trash2, X } from "lucide-react";
 import { Markdown } from "../../notebook-view";
-import { api, IDEA_STATUS, KINDS, size, when, type Doc } from "../../docs-screen";
+import { api, CategorySelect, IDEA_STATUS, KINDS, size, when, type Category, type Doc } from "../../docs-screen";
+import { ResultView } from "../../runs-screen";
 import { REQUEST_STATUS, type RunRequest } from "../../run-request-shared";
 
 type Full = Doc & {
@@ -81,7 +82,13 @@ export default function DocPage({ params }: { params: Promise<{ id: string }> })
     [error, setError] = useState(""),
     [info, setInfo] = useState(""),
     [deleted, setDeleted] = useState(false);
-  const [requests, setRequests] = useState<RunRequest[]>([]);
+  const [requests, setRequests] = useState<RunRequest[]>([]),
+    [categories, setCategories] = useState<Category[]>([]);
+  useEffect(() => {
+    api<Category[]>("/api/docs/categories")
+      .then(setCategories)
+      .catch(() => {});
+  }, []);
   useEffect(() => {
     if (doc?.kind !== "idea") return;
     fetch(`/api/run-requests?idea_id=${doc.id}&limit=50`, { cache: "no-store" })
@@ -114,6 +121,27 @@ export default function DocPage({ params }: { params: Promise<{ id: string }> })
   useEffect(() => {
     void load();
   }, [load]);
+  /** Latest runs of this idea (at most 10, the comparison limit) become a new result page in the same category. */
+  async function createResult() {
+    if (!doc) return;
+    const tab = window.open("about:blank", "_blank");
+    try {
+      const created = await api<Doc>("/api/docs", "POST", {
+        kind: "result",
+        format: "markdown",
+        title: `Kết quả: ${doc.title}`.slice(0, 300),
+        // The Markdown renderer only does **bold** and `code`, so the idea is named, not linked.
+        body: `Ý tưởng #${doc.id}: **${doc.title}**\n\n## Kết luận\n\n`,
+        run_ids: doc.runs.slice(0, 10).map((r) => r.id),
+        ...(doc.category_id ? { category_id: doc.category_id } : {}),
+      });
+      if (tab) tab.location.href = `/docs/${created.id}`;
+      setInfo(`Đã tạo trang kết quả #${created.id}.`);
+    } catch (e) {
+      tab?.close();
+      setError(e instanceof Error ? e.message : "Không tạo được trang kết quả.");
+    }
+  }
   async function patch(body: object, done: string) {
     setError("");
     setInfo("");
@@ -256,6 +284,11 @@ export default function DocPage({ params }: { params: Promise<{ id: string }> })
               ))}
             </div>
           )}
+          {doc.kind === "result" && (
+            <section className="dc-result">
+              <ResultView runIds={doc.runs.map((r) => r.id).sort((a, b) => a - b)} />
+            </section>
+          )}
           <section className="dc-viewer">
             {edit && doc.format !== "file" ? (
               <textarea
@@ -270,6 +303,14 @@ export default function DocPage({ params }: { params: Promise<{ id: string }> })
             )}
           </section>
           <section className="dc-side">
+            <div>
+              <b>Danh mục</b>
+              <CategorySelect
+                categories={categories}
+                value={doc.category_id ? String(doc.category_id) : ""}
+                onChange={(v) => void patch({ category_id: v ? Number(v) : null }, "Đã đổi danh mục.")}
+              />
+            </div>
             <div>
               <b>Paper liên kết</b>
               {doc.papers.length ? (
@@ -352,6 +393,14 @@ export default function DocPage({ params }: { params: Promise<{ id: string }> })
                   ))}
               </select>
             </div>
+            {doc.kind === "idea" && (
+              <div>
+                <button className="secondary" disabled={!doc.runs.length} onClick={() => void createResult()}>
+                  Tạo kết quả từ các run
+                </button>
+                {!doc.runs.length && <span className="dc-muted">Gắn run cho ý tưởng trước.</span>}
+              </div>
+            )}
             {doc.kind === "idea" && (
               <div>
                 <b>Yêu cầu chạy</b>

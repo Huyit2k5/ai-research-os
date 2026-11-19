@@ -20,6 +20,7 @@ import {
   Columns3,
   Copy,
   ExternalLink,
+  FileText,
   GitCompareArrows,
   ImageDown,
   Maximize2,
@@ -1244,16 +1245,18 @@ function Drawer({
   );
 }
 
-function CompareView({
+export function CompareView({
   data,
   history,
   back,
   open,
+  actions,
 }: {
   data: Compare;
   history: Record<number, Point[]>;
-  back: () => void;
+  back?: () => void;
   open: (id: number) => void;
+  actions?: ReactNode;
 }) {
   const [sameOpen, setSameOpen] = useState(false);
   const keys = useMemo(() => historyKeys(data.runs.map((r) => history[r.id])), [data, history]);
@@ -1281,9 +1284,14 @@ function CompareView({
             metric.
           </p>
         </div>
-        <button className="secondary" onClick={back}>
-          Quay lại danh sách
-        </button>
+        <div className="rn-head-actions">
+          {actions}
+          {back && (
+            <button className="secondary" onClick={back}>
+              Quay lại danh sách
+            </button>
+          )}
+        </div>
       </div>
       <div className="rn-body">
         <div className="rn-scroll">
@@ -1579,6 +1587,26 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
       setError(msg(e, "Không thể xóa run."));
     }
   }
+  async function saveAsResult(ids: number[]) {
+    const title = window.prompt("Tiêu đề trang kết quả", `So sánh run ${ids.map((id) => `#${id}`).join(", ")}`);
+    if (!title?.trim()) return;
+    // Opened before the request so the browser does not treat it as an unrequested popup.
+    const tab = window.open("about:blank", "_blank");
+    try {
+      const doc = await call<{ id: number }>("/api/docs", "POST", {
+        kind: "result",
+        format: "markdown",
+        title: title.trim(),
+        body: "",
+        run_ids: ids,
+      });
+      if (tab) tab.location.href = `/docs/${doc.id}`;
+      setInfo(`Đã tạo trang kết quả #${doc.id}: ${title.trim()}.`);
+    } catch (e) {
+      tab?.close();
+      setError(msg(e, "Không thể tạo trang kết quả."));
+    }
+  }
   async function runCompare() {
     const ids = selected.slice(0, MAX_COMPARE);
     setComparing(true);
@@ -1839,6 +1867,11 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
               history={compare.history}
               back={() => setCompare(null)}
               open={(id) => void view(id)}
+              actions={
+                <button className="secondary" onClick={() => void saveAsResult(compare.data.runs.map((r) => r.id))}>
+                  <FileText size={15} /> Lưu thành kết quả
+                </button>
+              }
             />
           ) : (
             <section className="panel">
@@ -2134,5 +2167,78 @@ export default function RunsScreen({ accounts, data }: { accounts: Account[]; da
         />
       )}
     </div>
+  );
+}
+
+/** Live comparison for a result document: 0 runs → hint, 1 run → its metrics, 2–10 → the compare view. */
+export function ResultView({ runIds }: { runIds: number[] }) {
+  const key = runIds.join(",");
+  const [state, setState] = useState<
+    | { kind: "loading" }
+    | { kind: "error"; message: string }
+    | { kind: "one"; run: RunDetail }
+    | { kind: "many"; data: Compare; history: Record<number, Point[]> }
+  >({ kind: "loading" });
+  useEffect(() => {
+    const ids = key ? key.split(",").map(Number) : [];
+    if (!ids.length) return;
+    let cancelled = false;
+    setState({ kind: "loading" });
+    const load = async () => {
+      if (ids.length === 1) return { kind: "one" as const, run: await call<RunDetail>(`/api/runs/${ids[0]}`) };
+      const [data, details] = await Promise.all([
+        call<Compare>(`/api/runs/compare?ids=${ids.join(",")}`),
+        Promise.all(ids.map((id) => call<RunDetail>(`/api/runs/${id}`))),
+      ]);
+      return { kind: "many" as const, data, history: Object.fromEntries(details.map((r) => [r.id, r.history ?? []])) };
+    };
+    load()
+      .then((next) => {
+        if (!cancelled) setState(next);
+      })
+      .catch((e) => {
+        if (!cancelled) setState({ kind: "error", message: msg(e, "Không tải được dữ liệu các run.") });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  const openRun = (id: number) => window.open(`/runs/${id}/code`, "_blank", "noopener");
+  if (!runIds.length) {
+    return <p className="rn-muted">Chưa gắn run nào. Gắn run ở cột bên phải để xem bảng so sánh và biểu đồ.</p>;
+  }
+  if (state.kind === "loading") return <p className="rn-muted">Đang tải dữ liệu các run...</p>;
+  if (state.kind === "error") return <div className="alert error">{state.message}</div>;
+  if (state.kind === "many") {
+    return <CompareView key={key} data={state.data} history={state.history} open={openRun} />;
+  }
+  const metrics = Object.entries(state.run.metrics);
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>
+            #{state.run.id} {state.run.name}
+          </h2>
+          <p>Trang kết quả mới gắn 1 run; gắn thêm run để so sánh.</p>
+        </div>
+      </div>
+      <div className="rn-body">
+        {metrics.length ? (
+          <table className="rn-cmp">
+            <tbody>
+              {metrics.map(([k, v]) => (
+                <tr key={k}>
+                  <th className="rn-cmp-key">{k}</th>
+                  <td>{fmt(v)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="rn-muted">Run này chưa có metric.</p>
+        )}
+      </div>
+    </section>
   );
 }
