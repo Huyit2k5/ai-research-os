@@ -77,6 +77,8 @@ Kiểm thử cách ly dữ liệu, token, MCP, thao tác hàng loạt, xuất Bi
 
 ## Theo dõi experiment
 
+**File output:** ở trang chi tiết run lấy từ Kaggle, bấm **Xem file output** để thấy các file notebook đã ghi ra (đúng version của run). Lọc theo tên hoặc đuôi, tick chọn rồi **Tải n file đã chọn** (lần đầu trình duyệt hỏi cho phép tải nhiều file), hoặc **Sao chép lệnh curl** để tải file lớn trên máy/server khác. Kaggle không cho biết dung lượng và không hỗ trợ tải zip. AI lấy danh sách qua MCP `list_run_outputs`.
+
 Mỗi lần chạy notebook Kaggle được lưu thành một run gồm config, metrics, history theo step, trạng thái, môi trường và code. Thêm helper [`docs/ros_tracker.py`](docs/ros_tracker.py) vào notebook (utility script, dataset hoặc dán vào cell đầu) và gọi `log_config`, `log_metric`, `log_summary`, `finish`; helper ghi `/kaggle/working/ros_run.json` và in các dòng `@@ROS_CONFIG` / `@@ROS_METRIC` làm dự phòng. Run được thu khi màn hình Logs thấy notebook chạy xong, khi nhấn **Thu run từ Kaggle**, hoặc khi Claude gọi `capture_run`; chưa có tiến trình chạy nền. Run ở Colab hoặc máy local được ghi thủ công trên giao diện hoặc qua `log_run`. Có thể so sánh 2–10 run và dùng 8 tool MCP cho run. Hướng dẫn đầy đủ và giới hạn: [docs/EXPERIMENT_TRACKING.md](docs/EXPERIMENT_TRACKING.md). Chưa kiểm chứng với notebook thật.
 
 ## Chạy notebook từ app (có duyệt)

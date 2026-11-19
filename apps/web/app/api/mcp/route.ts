@@ -51,6 +51,7 @@ import {
   REQUEST_STATUSES,
 } from "../../../lib/run-requests";
 import { listNotebookCategories, setNotebookCategory } from "../../../lib/notebook-categories";
+import { listRunOutputs } from "../../../lib/run-outputs";
 import type { Scope } from "../../../lib/workspace";
 
 export const runtime = "nodejs";
@@ -310,6 +311,14 @@ const TOOLS: Tool[] = [
       properties: { id: { type: "integer" }, include_code: { type: "boolean", default: false } },
       required: ["id"],
     },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_run_outputs",
+    description:
+      "Liệt kê file output của một run lấy từ Kaggle (đúng version của run): tên file kèm thư mục và link tải trực tiếp (không cần đăng nhập, không có dung lượng). Dùng để đọc kết quả như submission.csv, ảnh biểu đồ hoặc model. Link là quyền truy cập vào output của notebook riêng tư: không chia sẻ ra ngoài workspace. truncated=true khi còn file chưa liệt kê." +
+      RUN_NOTE,
+    inputSchema: { type: "object", properties: { run_id: { type: "integer" } }, required: ["run_id"] },
     annotations: { readOnlyHint: true },
   },
   {
@@ -725,6 +734,8 @@ async function callTool(s: Scope, name: string, args: Record<string, unknown>) {
       });
       return { total: r.total, offset: r.offset, items: r.items.map(runBrief) };
     }
+    case "list_run_outputs":
+      return await listRunOutputs(s, args.run_id);
     case "get_run": {
       const r = await getRun(s, args.id, { withCode: args.include_code === true }),
         h = Array.isArray(r.history) ? r.history : [];
