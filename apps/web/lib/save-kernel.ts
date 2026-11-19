@@ -9,7 +9,13 @@ export type PushSettings = {
   competition_sources?: string[];
   kernel_sources?: string[];
   model_sources?: string[];
+  // false = Quick Save: a new version without running any cell (verified 2026-11-19).
+  run?: boolean;
+  // Kaggle stops the run after this long (sessionTimeoutSeconds, verified 2026-11-19).
+  timeout_minutes?: number;
 };
+// Upper bound for a timeout someone sets; with none set no timeout is sent and only Kaggle's own session limit applies.
+export const MAX_TIMEOUT_MINUTES = 720;
 export const MACHINES: Record<Machine, string> = { t4x2: "NvidiaTeslaT4", l4: "NvidiaL4", tpu: "TpuV5E8", cpu: "" };
 export const MAX_CODE = 2 * 1024 * 1024;
 const SOURCES = [
@@ -30,7 +36,14 @@ export function parseSettings(raw: unknown): PushSettings {
       throw new Error("Loại máy không hợp lệ. Dùng t4x2, l4, tpu hoặc cpu.");
     out.machine = r.machine as Machine;
   }
-  for (const k of ["enable_internet", "is_private"] as const)
+  if (r.timeout_minutes !== undefined) {
+    const t = r.timeout_minutes;
+    if (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > MAX_TIMEOUT_MINUTES) {
+      throw new Error(`timeout_minutes phải là số phút nguyên từ 1 đến ${MAX_TIMEOUT_MINUTES}.`);
+    }
+    out.timeout_minutes = t;
+  }
+  for (const k of ["enable_internet", "is_private", "run"] as const)
     if (r[k] !== undefined) {
       if (typeof r[k] !== "boolean") throw new Error(`${k} phải là true hoặc false.`);
       out[k] = r[k];
@@ -82,9 +95,12 @@ export function buildSaveKernelBody(input: {
     enableGpu: !!shape && !tpu,
     enableTpu: tpu,
     enableInternet: s.enable_internet ?? c?.enableInternet === true,
-    kernelExecutionType: "SaveAndRunAll",
+    kernelExecutionType: s.run === false ? "QuickSave" : "SaveAndRunAll",
     ...(shape ? { machineShape: shape } : {}),
   };
+  if (s.run !== false && s.timeout_minutes) {
+    body.sessionTimeoutSeconds = s.timeout_minutes * 60;
+  }
   for (const [k, field] of SOURCES) body[field] = s[k] ?? (Array.isArray(c?.[field]) ? c[field] : []);
   return body;
 }

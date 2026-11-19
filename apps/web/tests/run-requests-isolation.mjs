@@ -231,6 +231,14 @@ assert.equal(fresh.status, 201, fresh.text);
 assert.equal(fresh.body.ref, null);
 assert.equal(fresh.body.new_title, "Notebook mới");
 ok("a new notebook request (new_title, ipynb) is accepted");
+const saveOnlyReq = await make(tA, { run: false, timeout_minutes: 30 });
+assert.equal(saveOnlyReq.status, 201, saveOnlyReq.text);
+assert.equal(saveOnlyReq.body.settings.run, false);
+assert.equal(saveOnlyReq.body.settings.timeout_minutes, 30);
+ok("run: false and timeout_minutes are kept on the request");
+await bad({ timeout_minutes: 0 }, "timeout_minutes 0");
+await bad({ timeout_minutes: 721 }, "timeout_minutes over 720");
+await bad({ run: "no" }, "non-boolean run");
 
 // 4. Reject and cancel
 const viaToken = await request(`/api/run-requests/${req1}/reject`, {
@@ -361,6 +369,25 @@ assert.deepEqual(both.map((r) => r.status).sort(), [409, 502], both.map((r) => r
 ok("two reviewers approving at once: one push, one 409");
 assert.equal((await request(`/api/run-requests/${req1}/approve`, { method: "POST", cookie: a })).status, 409);
 ok("a rejected request cannot be approved");
+const toSave = (await make(tA)).body.id;
+assert.equal(
+  (await request(`/api/run-requests/${toSave}/approve`, { method: "POST", bearer: tA, origin: null, body: { save_only: true } }))
+    .status,
+  401,
+);
+ok("a token cannot approve a Quick Save either");
+const saveTry = await request(`/api/run-requests/${toSave}/approve`, {
+  method: "POST",
+  cookie: a,
+  body: { save_only: true },
+});
+assert.equal(saveTry.status, 502, saveTry.text);
+const afterSave = (await request(`/api/run-requests/${toSave}`, { cookie: a })).body;
+assert.equal(afterSave.status, "pending");
+assert.equal(afterSave.settings.run, undefined);
+ok("a failed Quick Save leaves the request pending and does not keep the save-only choice");
+assert.equal((await request("/api/run-requests?status=saved", { cookie: a })).status, 200);
+ok("saved is a known status for filtering");
 const manual = await request("/api/runs", { method: "POST", cookie: a, body: { name: `manual ${stamp}` } });
 assert.equal(manual.status, 201, manual.text);
 const noCode = await request("/api/run-requests/run-now", {

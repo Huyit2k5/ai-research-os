@@ -158,8 +158,19 @@ export default function RunRequestPage({ params }: { params: Promise<{ id: strin
             {req.status === "pending" && (
               <div className="rq-actions">
                 <button className="primary" disabled={busy} onClick={() => void act("approve")}>
-                  <Check size={16} /> {busy ? "Đang gửi lên Kaggle..." : "Duyệt & chạy"}
+                  <Check size={16} />{" "}
+                  {busy ? "Đang gửi lên Kaggle..." : req.settings.run === false ? "Duyệt & lưu" : "Duyệt & chạy"}
                 </button>
+                {req.settings.run !== false && (
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void act("approve", { save_only: true })}
+                    title="Quick Save: lưu thành version mới trên Kaggle, không chạy cell nào"
+                  >
+                    Lưu, không chạy
+                  </button>
+                )}
                 <button className="secondary" disabled={busy} onClick={() => setRejecting((v) => !v)}>
                   <X size={16} /> Từ chối…
                 </button>

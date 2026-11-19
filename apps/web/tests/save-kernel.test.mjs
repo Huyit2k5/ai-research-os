@@ -112,4 +112,29 @@ assert.equal(savedRef(undefined), null);
 assert.equal(savedRef("/code/bad ref"), null);
 ok("savedRef strips /code/ and rejects malformed refs");
 
+b = buildSaveKernelBody({ ...base, settings: { run: false }, current: gpuNb });
+assert.equal(b.kernelExecutionType, "QuickSave");
+assert.deepEqual(b.datasetDataSources, ["a/b"]);
+ok("run: false → QuickSave, still keeping the notebook's sources");
+
+b = buildSaveKernelBody({ ...base, settings: { timeout_minutes: 90 }, current: null });
+assert.equal(b.kernelExecutionType, "SaveAndRunAll");
+assert.equal(b.sessionTimeoutSeconds, 5400);
+ok("timeout_minutes → sessionTimeoutSeconds");
+
+b = buildSaveKernelBody({ ...base, settings: { run: false, timeout_minutes: 90 }, current: null });
+assert.ok(!("sessionTimeoutSeconds" in b));
+ok("a quick save sends no timeout");
+
+b = buildSaveKernelBody({ ...base, settings: {}, current: null });
+assert.ok(!("sessionTimeoutSeconds" in b));
+ok("no timeout unless asked");
+
+assert.deepEqual(parseSettings({ run: false, timeout_minutes: 30 }), { run: false, timeout_minutes: 30 });
+ok("parseSettings keeps run and timeout_minutes");
+assert.throws(() => parseSettings({ run: "no" }));
+ok("non-boolean run rejected");
+for (const bad of [0, 721, 1.5, "30"]) assert.throws(() => parseSettings({ timeout_minutes: bad }), /timeout_minutes/);
+ok("timeout_minutes must be a whole number from 1 to 720");
+
 console.log(`\n${passed} checks passed`);
