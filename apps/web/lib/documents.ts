@@ -468,19 +468,19 @@ export async function deleteDocAndFile(s: Scope, idRaw: unknown) {
 
 export type Category = { id: number; name: string; doc_count: number; created_by: string | null; can_delete: boolean };
 
-const categoryName = (raw: unknown) => {
+export const categoryName = (raw: unknown) => {
   const name = typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
   if (!name || name.length > MAX_CATEGORY_NAME) {
     throw new AppError(422, `Tên danh mục phải có từ 1 đến ${MAX_CATEGORY_NAME} ký tự.`);
   }
   return name;
 };
-const categoryIdOf = (v: unknown) => {
+export const categoryIdOf = (v: unknown) => {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 1 || n > 2147483647) throw new AppError(404, "Không tìm thấy danh mục.");
   return n;
 };
-const isDuplicate = (e: unknown) => (e as { code?: string })?.code === "23505";
+export const isDuplicate = (e: unknown) => (e as { code?: string })?.code === "23505";
 const CATEGORY_FIELDS = `c.id, c.name, c.created_by AS owner_id, u.name AS created_by,
   (SELECT COUNT(*)::int FROM documents d WHERE d.category_id=c.id AND (d.upload_state IS NULL OR d.upload_state='ready')) AS doc_count`;
 const CATEGORY_FROM = `doc_categories c LEFT JOIN "user" u ON u.id=c.created_by`;

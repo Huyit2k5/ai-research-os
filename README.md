@@ -44,6 +44,8 @@ Thành viên trong workspace cùng thấy danh sách kết nối Kaggle và ngư
 
 Sau khi thêm tài khoản và token, mở **Quota & tài nguyên** và nhấn **Đồng bộ** tại tài khoản mong muốn. Quota GPU/TPU và danh sách notebook được lưu vào database sau mỗi lần đồng bộ và hiển thị lại khi tải trang (lịch sử quota giữ 90 ngày). Hiển thị tối đa 100 notebook đầu cho mỗi tài khoản; nếu còn dữ liệu, giao diện sẽ thông báo.
 
+Ở **Notebooks**, cột **Danh mục** bên trái chia notebook theo mục đích. Mỗi workspace có sẵn **Huấn luyện** và **Đánh giá**, tự thêm, đổi tên, xóa được. Chọn danh mục ở từng dòng; xóa danh mục thì notebook trong đó về "Chưa phân loại". AI dùng `list_notebook_categories` và `set_notebook_category` qua MCP.
+
 Trong **Logs & hoạt động**, chọn một notebook đã đồng bộ để lấy logs phiên gần nhất. Nhấn **Theo dõi trực tiếp** để nhận logs từ Kaggle và **Dừng theo dõi** khi hoàn tất; tính khả dụng phụ thuộc phiên notebook và Kaggle. Logs không lưu vào database và giới hạn hiển thị phần cuối. Trạng thái chạy của notebook hiển thị cùng logs và tự cập nhật khi đang chạy; cần kiểm chứng với notebook thật.
 
 Username do người dùng nhập chỉ là nhãn nhận diện, chưa được xác minh với token. Các kết nối được cách ly theo workspace.

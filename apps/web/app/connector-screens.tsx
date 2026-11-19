@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import LogsScreen from "./logs-screen";
 import { RunModal } from "./run-requests-panel";
+import CategoryNav from "./category-nav";
+import { CategorySelect } from "./docs-screen";
 import {
   Activity,
   ArrowRight,
@@ -46,6 +48,11 @@ type Props = {
   data: Record<number, SyncData>;
   syncing: number | null;
   sync: (account: Account) => void;
+};
+
+type NotebookCategories = {
+  categories: { id: number; name: string; notebook_count: number; can_delete: boolean }[];
+  labels: { account_id: number; ref: string; category_id: number }[];
 };
 
 function value(row: Record<string, unknown>, ...keys: string[]) {
@@ -98,8 +105,53 @@ export default function ConnectorScreens({ screen, accounts, loading, navigate, 
   const connected = accounts.filter((account) => account.verified).length;
   const [accountFilter, setAccountFilter] = useState(""),
     [runFor, setRunFor] = useState<{ accountId: number; ref: string; title: string } | null>(null);
+  // "" = all, "none" = uncategorized, otherwise a notebook category id
+  const [nbCategory, setNbCategory] = useState(""),
+    [nbCats, setNbCats] = useState<NotebookCategories>({ categories: [], labels: [] }),
+    [nbError, setNbError] = useState("");
+  const loadNbCats = useCallback(async () => {
+    try {
+      const r = await fetch("/api/notebook-categories", { cache: "no-store" });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.detail);
+      setNbCats(body);
+    } catch (e) {
+      setNbError(e instanceof Error && e.message ? e.message : "Không tải được danh mục notebook.");
+    }
+  }, []);
+  useEffect(() => {
+    if (screen === "notebooks") void loadNbCats();
+  }, [screen, loadNbCats]);
+  const labelOf = (accountId: number, ref: string) =>
+    nbCats.labels.find((l) => l.account_id === accountId && l.ref === ref)?.category_id ?? null;
+  const inCategory = (accountId: number, ref: string) => {
+    const id = labelOf(accountId, ref);
+    if (nbCategory === "") return true;
+    if (nbCategory === "none") return id === null;
+    return String(id) === nbCategory;
+  };
+  async function setLabel(accountId: number, ref: string, v: string) {
+    setNbError("");
+    try {
+      const r = await fetch("/api/notebook-categories/labels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account_id: accountId, ref, category_id: v ? Number(v) : null }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail);
+    } catch (e) {
+      setNbError(e instanceof Error && e.message ? e.message : "Không lưu được danh mục.");
+    }
+    await loadNbCats();
+  }
   const withNotebooks = accounts.filter((account) => (data[account.id]?.notebooks?.length ?? 0) > 0),
     shown = accounts.filter((account) => !accountFilter || String(account.id) === accountFilter);
+  const shownCount = shown.reduce(
+    (n, account) =>
+      n + (data[account.id]?.notebooks ?? []).filter((item) => inCategory(account.id, value(item, "ref"))).length,
+    0,
+  );
   if (screen === "overview")
     return (
       <>
@@ -336,110 +388,141 @@ export default function ConnectorScreens({ screen, accounts, loading, navigate, 
             Đến trang đồng bộ
           </button>
         </div>
-        <section className="panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Danh sách notebook</h2>
-              <p>Hiển thị tối đa 100 notebook cho mỗi tài khoản trong phiên hiện tại.</p>
+        {nbError && (
+          <div className="alert error" role="alert">
+            {nbError}
+          </div>
+        )}
+        <div className="dc-layout">
+          <CategoryNav
+            categories={nbCats.categories.map((c) => ({ ...c, count: c.notebook_count }))}
+            value={nbCategory}
+            onSelect={setNbCategory}
+            base="/api/notebook-categories"
+            noun="notebook"
+            onChanged={() => void loadNbCats()}
+            onError={setNbError}
+          />
+          <section className="panel dc-main">
+            <div className="panel-heading">
+              <div>
+                <h2>Danh sách notebook</h2>
+                <p>Hiển thị tối đa 100 notebook cho mỗi tài khoản trong phiên hiện tại.</p>
+              </div>
+              {withNotebooks.length > 1 && (
+                <label className="log-filter nb-filter">
+                  <span>Tài khoản</span>
+                  <select
+                    value={accountFilter}
+                    onChange={(event) => setAccountFilter(event.target.value)}
+                    aria-label="Lọc notebook theo tài khoản"
+                  >
+                    <option value="">Tất cả tài khoản ({withNotebooks.length})</option>
+                    {withNotebooks.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.label} (@{account.username})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
-            {withNotebooks.length > 1 && (
-              <label className="log-filter nb-filter">
-                <span>Tài khoản</span>
-                <select
-                  value={accountFilter}
-                  onChange={(event) => setAccountFilter(event.target.value)}
-                  aria-label="Lọc notebook theo tài khoản"
-                >
-                  <option value="">Tất cả tài khoản ({withNotebooks.length})</option>
-                  {withNotebooks.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.label} (@{account.username})
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>NOTEBOOK</th>
+                    <th>DANH MỤC</th>
+                    <th>TÀI KHOẢN</th>
+                    <th>LẦN CHẠY GẦN NHẤT</th>
+                    <th>LIÊN KẾT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.flatMap((account) =>
+                    (data[account.id]?.notebooks ?? []).map((item, index) => {
+                      const ref = value(item, "ref");
+                      if (!inCategory(account.id, ref)) return null;
+                      const label = labelOf(account.id, ref);
+                      return (
+                        <tr key={`${account.id}-${index}`}>
+                          <td>
+                            <div className="account">
+                              <div className="stat-icon blue">
+                                <BookOpen size={18} />
+                              </div>
+                              <div>
+                                <b>{value(item, "title")}</b>
+                                <small>{ref}</small>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            {/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(ref) && (
+                              <CategorySelect
+                                categories={nbCats.categories}
+                                value={label ? String(label) : ""}
+                                onChange={(v) => void setLabel(account.id, ref, v)}
+                              />
+                            )}
+                          </td>
+                          <td className="time">{account.label}</td>
+                          <td className="time">{value(item, "lastRunTime", "last_run_time")}</td>
+                          <td>
+                            {/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(ref) && (
+                              <a
+                                className="text-button"
+                                href={`https://www.kaggle.com/code/${ref}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Mở Kaggle ↗
+                              </a>
+                            )}
+                            {/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(ref) && (
+                              <button
+                                className="text-button"
+                                onClick={() => setRunFor({ accountId: account.id, ref, title: value(item, "title") })}
+                              >
+                                Chạy ▶
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }),
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {nbCategory !== "" && shownCount === 0 && (
+              <p className="sync-message">Không có notebook nào trong danh mục này.</p>
             )}
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>NOTEBOOK</th>
-                  <th>TÀI KHOẢN</th>
-                  <th>LẦN CHẠY GẦN NHẤT</th>
-                  <th>LIÊN KẾT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.flatMap((account) =>
-                  (data[account.id]?.notebooks ?? []).map((item, index) => {
-                    const ref = value(item, "ref");
-                    return (
-                      <tr key={`${account.id}-${index}`}>
-                        <td>
-                          <div className="account">
-                            <div className="stat-icon blue">
-                              <BookOpen size={18} />
-                            </div>
-                            <div>
-                              <b>{value(item, "title")}</b>
-                              <small>{ref}</small>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="time">{account.label}</td>
-                        <td className="time">{value(item, "lastRunTime", "last_run_time")}</td>
-                        <td>
-                          {/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(ref) && (
-                            <a
-                              className="text-button"
-                              href={`https://www.kaggle.com/code/${ref}`}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Mở Kaggle ↗
-                            </a>
-                          )}
-                          {/^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+$/.test(ref) && (
-                            <button
-                              className="text-button"
-                              onClick={() => setRunFor({ accountId: account.id, ref, title: value(item, "title") })}
-                            >
-                              Chạy ▶
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  }),
-                )}
-              </tbody>
-            </table>
-          </div>
-          {shown.map((account) =>
-            data[account.id]?.errors.notebooks ? (
-              <p className="sync-message" key={account.id}>
-                {account.label}: {data[account.id].errors.notebooks}
-              </p>
-            ) : data[account.id]?.notebooks_truncated ? (
-              <p className="sync-message" key={account.id}>
-                {account.label}: chỉ hiển thị trang đầu; còn notebook chưa tải.
-              </p>
-            ) : null,
-          )}
-          {!accounts.some((account) => (data[account.id]?.notebooks?.length ?? 0) > 0) && (
-            <Pending
-              icon={<BookOpen size={24} />}
-              title="Chưa có notebook để hiển thị"
-              description="Hãy đồng bộ tài khoản hoặc kiểm tra lại nếu tài khoản chưa có notebook."
-              action={
-                <button className="secondary" onClick={() => navigate("quota")}>
-                  Đến trang đồng bộ
-                </button>
-              }
-            />
-          )}
-        </section>
+            {shown.map((account) =>
+              data[account.id]?.errors.notebooks ? (
+                <p className="sync-message" key={account.id}>
+                  {account.label}: {data[account.id].errors.notebooks}
+                </p>
+              ) : data[account.id]?.notebooks_truncated ? (
+                <p className="sync-message" key={account.id}>
+                  {account.label}: chỉ hiển thị trang đầu; còn notebook chưa tải.
+                </p>
+              ) : null,
+            )}
+            {!accounts.some((account) => (data[account.id]?.notebooks?.length ?? 0) > 0) && (
+              <Pending
+                icon={<BookOpen size={24} />}
+                title="Chưa có notebook để hiển thị"
+                description="Hãy đồng bộ tài khoản hoặc kiểm tra lại nếu tài khoản chưa có notebook."
+                action={
+                  <button className="secondary" onClick={() => navigate("quota")}>
+                    Đến trang đồng bộ
+                  </button>
+                }
+              />
+            )}
+          </section>
+        </div>
         {runFor && (
           <RunModal
             accountId={runFor.accountId}
