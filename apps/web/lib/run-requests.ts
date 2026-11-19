@@ -13,9 +13,12 @@ export function initRunRequests() {
     await initDocs();
     await db.query(`
     CREATE TABLE IF NOT EXISTS run_requests (id SERIAL PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES organization(id) ON DELETE CASCADE, account_id INTEGER NOT NULL REFERENCES compute_accounts(id) ON DELETE CASCADE, ref TEXT, new_title TEXT, kernel_type TEXT NOT NULL CHECK (kernel_type IN ('notebook','script')), code TEXT NOT NULL, settings JSONB NOT NULL DEFAULT '{}', summary TEXT NOT NULL DEFAULT '', idea_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','running','done','failed','rejected','cancelled','expired')), requested_by TEXT REFERENCES "user"(id) ON DELETE SET NULL, requested_via TEXT NOT NULL CHECK (requested_via IN ('mcp','api','web')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','running','done','failed','rejected','cancelled','expired','saved')), requested_by TEXT REFERENCES "user"(id) ON DELETE SET NULL, requested_via TEXT NOT NULL CHECK (requested_via IN ('mcp','api','web')),
       reviewed_by TEXT REFERENCES "user"(id) ON DELETE SET NULL, reviewed_at TIMESTAMPTZ, review_note TEXT, version INTEGER, run_id INTEGER REFERENCES experiment_runs(id) ON DELETE SET NULL, error TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
     CREATE INDEX IF NOT EXISTS run_requests_ws_idx ON run_requests(workspace_id, status, created_at DESC);
+    -- 'saved' = approved as a Quick Save (new version, nothing ran); tables created before it get the wider check here.
+    ALTER TABLE run_requests DROP CONSTRAINT IF EXISTS run_requests_status_check;
+    ALTER TABLE run_requests ADD CONSTRAINT run_requests_status_check CHECK (status IN ('pending','approved','running','done','failed','rejected','cancelled','expired','saved'));
     ALTER TABLE run_requests ENABLE ROW LEVEL SECURITY`);
   })().catch((err) => {
     ready = undefined;
@@ -27,7 +30,17 @@ export function initRunRequests() {
 export const MAX_PENDING = 50,
   MAX_SUMMARY = 4000,
   MAX_NOTE = 2000,
-  REQUEST_STATUSES = ["pending", "approved", "running", "done", "failed", "rejected", "cancelled", "expired"] as const;
+  REQUEST_STATUSES = [
+    "pending",
+    "approved",
+    "running",
+    "done",
+    "failed",
+    "rejected",
+    "cancelled",
+    "expired",
+    "saved",
+  ] as const;
 export type RunRequest = {
   id: number;
   account_id: number;
@@ -186,6 +199,8 @@ async function validated(s: Scope, f: Record<string, unknown>, codeFromKaggle: b
           "competition_sources",
           "kernel_sources",
           "model_sources",
+          "run",
+          "timeout_minutes",
         ]
           .filter((k) => f[k] !== undefined)
           .map((k) => [k, f[k]]),
@@ -254,7 +269,8 @@ async function validated(s: Scope, f: Record<string, unknown>, codeFromKaggle: b
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** Sends an `approved` row to Kaggle. Any failure puts it back to `pending` with the error, since nothing ran. */
-async function push(id: number) {
+/** saveOnly: the reviewer's Quick Save choice; it is stored only once Kaggle has the version. */
+async function push(id: number, saveOnly = false) {
   const r = (
     await db.query(
       "SELECT r.*, a.credential FROM run_requests r JOIN compute_accounts a ON a.id=r.account_id WHERE r.id=$1 AND r.status='approved'",
@@ -262,6 +278,7 @@ async function push(id: number) {
     )
   ).rows[0];
   if (!r) throw new AppError(409, "Yêu cầu này không còn ở trạng thái đã duyệt.");
+  const settings = saveOnly ? { ...r.settings, run: false } : r.settings;
   let sent = false;
   try {
     const token = decryptToken(r.credential);
@@ -283,10 +300,11 @@ async function push(id: number) {
       newTitle: r.new_title,
       kernelType,
       code,
-      settings: r.settings,
+      settings,
       current,
     });
-    if (body.enableGpu || body.enableTpu) {
+    const quickSave = body.kernelExecutionType === "QuickSave";
+    if (!quickSave && (body.enableGpu || body.enableTpu)) {
       const kind = body.enableTpu ? "TPU" : "GPU",
         q = normalizeQuota(await kaggleCall(token, "GetAcceleratorQuotaStatistics", {})).find(
           (x) => x.resource === kind,
@@ -300,18 +318,20 @@ async function push(id: number) {
     const saved = await kaggleCall(token, "SaveKernel", body);
     if (typeof saved.error === "string" && saved.error)
       throw new AppError(502, `Kaggle từ chối: ${saved.error.slice(0, 300)}`);
-    sent = true; // from here Kaggle is running it: never go back to pending, or a re-approve would run it twice
+    sent = true; // from here Kaggle has the version: never go back to pending, or a re-approve would push it twice
     await db.query(
-      "UPDATE run_requests SET status='running', ref=$2, version=$3, code=$4, kernel_type=$5, error=NULL, updated_at=NOW() WHERE id=$1",
+      "UPDATE run_requests SET status=$6, ref=$2, version=$3, code=$4, kernel_type=$5, settings=$7, error=NULL, updated_at=NOW() WHERE id=$1",
       [
         id,
         savedRef(saved.ref) ?? r.ref,
         Number.isInteger(saved.versionNumber) ? saved.versionNumber : null,
         code,
         kernelType,
+        quickSave ? "saved" : "running",
+        JSON.stringify(settings),
       ],
     );
-    if (r.idea_id)
+    if (r.idea_id && !quickSave)
       await db.query(
         "UPDATE documents SET status='trying', updated_at=NOW() WHERE id=$1 AND kind='idea' AND status='new'",
         [r.idea_id],
@@ -320,7 +340,10 @@ async function push(id: number) {
     const err = e instanceof AppError ? e : new AppError(502, "Không gửi được lên Kaggle.");
     if (sent) {
       await db
-        .query("UPDATE run_requests SET status='running', updated_at=NOW() WHERE id=$1 AND status='approved'", [id])
+        .query("UPDATE run_requests SET status=$2, updated_at=NOW() WHERE id=$1 AND status='approved'", [
+          id,
+          settings.run === false ? "saved" : "running",
+        ])
         .catch(() => {});
       throw new AppError(
         500,
@@ -335,7 +358,8 @@ async function push(id: number) {
   }
 }
 
-export async function approveRequest(s: Scope, idRaw: unknown): Promise<RunRequest> {
+/** saveOnly: the reviewer chooses Quick Save (a version without running), whatever the request asked for. */
+export async function approveRequest(s: Scope, idRaw: unknown, opts: { saveOnly?: boolean } = {}): Promise<RunRequest> {
   await initRunRequests();
   await rateLimit(s.userId, "run-approve", 10, 60);
   await sweep(s.workspaceId);
@@ -349,7 +373,7 @@ export async function approveRequest(s: Scope, idRaw: unknown): Promise<RunReque
     await getRequest(s, id);
     throw new AppError(409, "Yêu cầu này không còn chờ duyệt.");
   }
-  await push(id);
+  await push(id, opts.saveOnly === true);
   return getRequest(s, id);
 }
 
@@ -448,14 +472,18 @@ const accountFor = async (s: Scope, accountId: number) => {
   return a as { id: number; credential: string; workspace_id: string };
 };
 
-/** Follows a `running` request: on a terminal Kaggle status it captures the run, finishes the request and links the run to the idea.
- *  Kaggle reports the notebook's latest session, so a newer version pushed meanwhile is what gets followed (spec §7). */
+/** Follows a `running` request: on a terminal Kaggle status it captures the run, finishes the request and links the run to the idea. */
 export async function refreshRequest(s: Scope, idRaw: unknown): Promise<RunRequest> {
   const r = await getRequest(s, idRaw);
   if (r.status !== "running" || !r.ref) return r;
   const account = await accountFor(s, r.account_id),
     [userName, kernelSlug] = r.ref.split("/");
-  const st = await kaggleCall(decryptToken(account.credential), "GetKernelSessionStatus", { userName, kernelSlug });
+  // Kaggle names versions "v<N>"; a bare number is "not found".
+  const st = await kaggleCall(decryptToken(account.credential), "GetKernelSessionStatus", {
+    userName,
+    kernelSlug,
+    ...(r.version ? { versionLabel: `v${r.version}` } : {}),
+  });
   const status =
       (typeof st.status === "string" ? st.status : "").replace(/^KERNEL_WORKER_STATUS_/, "").toLowerCase() || "unknown",
     failure = typeof st.failureMessage === "string" ? st.failureMessage : "";

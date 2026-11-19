@@ -510,6 +510,16 @@ const TOOLS: Tool[] = [
         competition_sources: { type: "array", items: { type: "string" } },
         kernel_sources: { type: "array", items: { type: "string" } },
         model_sources: { type: "array", items: { type: "string" } },
+        run: {
+          type: "boolean",
+          description: "false = chỉ lưu version mới (Quick Save), không chạy cell nào. Mặc định true.",
+        },
+        timeout_minutes: {
+          type: "integer",
+          minimum: 1,
+          maximum: 720,
+          description: "Kaggle tự dừng sau chừng này phút. Bỏ trống = không đặt giới hạn riêng.",
+        },
         idea_id: { type: "integer" },
         summary: { type: "string", maxLength: 4000, description: "Mô tả thay đổi cho người duyệt" },
       },
