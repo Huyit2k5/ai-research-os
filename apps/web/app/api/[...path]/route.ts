@@ -44,7 +44,7 @@ function required(value: unknown, name: string, max: number) {
 async function streamLogs(req: Request, token: string, ref: string) {
   const [owner, slug, version] = ref.split("/");
   const url = new URL(`https://api.kaggle.com/v1/kernels/logs/stream/${owner}/${slug}`);
-  if (version) url.searchParams.set("versionLabel", version);
+  if (version) url.searchParams.set("versionLabel", `v${version}`);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30 * 60 * 1000);
   req.signal.addEventListener("abort", () => controller.abort(), { once: true });
@@ -295,7 +295,7 @@ async function handler(req: Request, ctx: Context) {
       const result = await kaggleCall(decryptToken(account.credential), "ListKernelSessionOutput", {
         userName,
         kernelSlug,
-        ...(versionLabel ? { versionLabel } : {}),
+        ...(versionLabel ? { versionLabel: `v${versionLabel}` } : {}),
       });
       const bytes = Buffer.from(typeof result.log === "string" ? result.log : "", "utf8"),
         limit = 256 * 1024;
