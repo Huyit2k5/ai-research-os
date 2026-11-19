@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ExternalLink, PlayCircle, X } from "lucide-react";
 import {
   ago,
   durationLabel,
+  followRunning,
   machineOf,
   MACHINE_LABEL,
   REQUEST_STATUS,
@@ -25,7 +26,7 @@ async function post(path: string, body: object = {}) {
   return data as RunRequest;
 }
 
-/** "Chờ duyệt" / "Đang chạy" tabs of the Thí nghiệm screen. The running tab follows each request every 30 s while visible. */
+/** "Chờ duyệt" / "Đang chạy" tabs of the Thí nghiệm screen. The running tab asks Kaggle on open and every 30 s while visible. */
 export default function RequestsPanel({ status, onChange }: { status: "pending" | "running"; onChange: () => void }) {
   const [items, setItems] = useState<RunRequest[] | null>(null),
     [error, setError] = useState(""),
@@ -46,16 +47,20 @@ export default function RequestsPanel({ status, onChange }: { status: "pending" 
     setItems(null);
     void load();
   }, [load]);
+  const changed = useRef(onChange);
+  changed.current = onChange;
   useEffect(() => {
     if (status !== "running") return;
-    const t = setInterval(() => {
+    const follow = async () => {
       if (document.hidden) return;
-      void Promise.all(
-        (items ?? []).map((r) => fetch(`/api/run-requests/${r.id}/status`, { cache: "no-store" }).catch(() => null)),
-      ).then(() => load());
-    }, 30000);
+      await followRunning();
+      await load();
+      changed.current();
+    };
+    void follow();
+    const t = setInterval(() => void follow(), 30000);
     return () => clearInterval(t);
-  }, [status, items, load]);
+  }, [status, load]);
   async function act(r: RunRequest, path: string, body?: object) {
     setBusy(r.id);
     setError("");

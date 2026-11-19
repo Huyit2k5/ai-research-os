@@ -69,6 +69,16 @@ export const durationLabel = (minutes: number) =>
 /** Choices offered for "Giới hạn thời gian chạy"; empty = no limit of our own. */
 export const TIMEOUT_CHOICES = [30, 60, 120, 240, 540];
 export const VIA_LABEL: Record<string, string> = { mcp: "AI qua MCP", api: "API", web: "Web" };
+
+/** A finished Kaggle run only leaves `running` when someone asks Kaggle, so ask for every running request. */
+export async function followRunning() {
+  const r = await fetch("/api/run-requests?status=running&limit=100", { cache: "no-store" }).catch(() => null);
+  const body = r?.ok ? await r.json() : null;
+  const items: RunRequest[] = body?.items ?? [];
+  await Promise.all(
+    items.map((x) => fetch(`/api/run-requests/${x.id}/status`, { cache: "no-store" }).catch(() => null)),
+  );
+}
 export const ago = (iso: string) => {
   const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
   return m < 1
