@@ -1,21 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import {
-  BarChart3,
-  FilePlus2,
-  FileText,
-  Folder,
-  Lightbulb,
-  Paperclip,
-  Pencil,
-  Plus,
-  Search,
-  Trash2,
-  Upload,
-  X,
-} from "lucide-react";
+import { BarChart3, FilePlus2, FileText, Folder, Lightbulb, Paperclip, Search, Upload, X } from "lucide-react";
 import { Markdown } from "./notebook-view";
+import CategoryNav from "./category-nav";
 
 export type Doc = {
   id: number;
@@ -47,7 +35,7 @@ export function CategorySelect({
   value,
   onChange,
 }: {
-  categories: Category[];
+  categories: { id: number; name: string }[];
   value: string;
   onChange: (v: string) => void;
 }) {
@@ -408,25 +396,6 @@ export default function DocsScreen() {
   useEffect(() => {
     void loadCategories();
   }, [loadCategories]);
-  async function categoryAction(action: "create" | "rename" | "delete", c?: Category) {
-    try {
-      if (action === "delete" && c) {
-        if (!window.confirm(`Xóa danh mục “${c.name}”? ${c.doc_count} tài liệu trong đó sẽ chuyển về Chưa phân loại.`))
-          return;
-        await api(`/api/docs/categories/${c.id}`, "DELETE");
-        if (category === String(c.id)) setCategory("");
-      } else {
-        const name = window.prompt(action === "create" ? "Tên danh mục mới" : "Đổi tên danh mục", c?.name ?? "");
-        if (!name?.trim()) return;
-        if (action === "create") await api("/api/docs/categories", "POST", { name });
-        else if (c) await api(`/api/docs/categories/${c.id}`, "PATCH", { name });
-      }
-      await loadCategories();
-      void reload();
-    } catch (e) {
-      setError(msg(e, "Không lưu được danh mục."));
-    }
-  }
   const reqId = useRef(0);
   const qs = useCallback(
     (offset: number) =>
@@ -511,41 +480,18 @@ export default function DocsScreen() {
         </div>
       )}
       <div className="dc-layout">
-        <nav className="panel dc-cats" aria-label="Danh mục">
-          <div className="dc-cats-head">DANH MỤC</div>
-          <button className={category === "" ? "on" : ""} onClick={() => setCategory("")}>
-            <Folder size={14} /> Tất cả
-          </button>
-          <button className={category === "none" ? "on" : ""} onClick={() => setCategory("none")}>
-            <Folder size={14} /> Chưa phân loại
-          </button>
-          {categories.map((c) => (
-            <div key={c.id} className={`dc-cat ${category === String(c.id) ? "on" : ""}`}>
-              <button onClick={() => setCategory(String(c.id))} title={c.name}>
-                <Folder size={14} /> <span>{c.name}</span> <small>{c.doc_count}</small>
-              </button>
-              <button
-                className="dc-cat-icon"
-                onClick={() => void categoryAction("rename", c)}
-                aria-label={`Đổi tên ${c.name}`}
-              >
-                <Pencil size={12} />
-              </button>
-              {c.can_delete && (
-                <button
-                  className="dc-cat-icon"
-                  onClick={() => void categoryAction("delete", c)}
-                  aria-label={`Xóa ${c.name}`}
-                >
-                  <Trash2 size={12} />
-                </button>
-              )}
-            </div>
-          ))}
-          <button className="dc-cat-add" onClick={() => void categoryAction("create")}>
-            <Plus size={14} /> Thêm danh mục
-          </button>
-        </nav>
+        <CategoryNav
+          categories={categories.map((c) => ({ ...c, count: c.doc_count }))}
+          value={category}
+          onSelect={setCategory}
+          base="/api/docs/categories"
+          noun="tài liệu"
+          onChanged={() => {
+            void loadCategories();
+            void reload();
+          }}
+          onError={setError}
+        />
         <div className="dc-main">
           <section className="panel dc-toolbar">
             <div className="dc-kinds" role="tablist" aria-label="Loại tài liệu">

@@ -50,6 +50,7 @@ import {
   refreshRequest,
   REQUEST_STATUSES,
 } from "../../../lib/run-requests";
+import { listNotebookCategories, setNotebookCategory } from "../../../lib/notebook-categories";
 import type { Scope } from "../../../lib/workspace";
 
 export const runtime = "nodejs";
@@ -252,6 +253,30 @@ const TOOLS: Tool[] = [
       "Liệt kê các kết nối Kaggle trong workspace của token (id, nhãn, username, người tạo, mine). Mọi thành viên trong workspace đều dùng được các kết nối này cho capture_run. Không bao giờ trả về credential.",
     inputSchema: { type: "object", properties: {} },
     annotations: { readOnlyHint: true },
+  },
+  {
+    name: "list_notebook_categories",
+    description:
+      "Liệt kê danh mục notebook của workspace (ví dụ Huấn luyện, Đánh giá: id, tên, số notebook) và notebook nào thuộc danh mục nào (labels: account_id, ref, category_id). Notebook không có trong labels là chưa phân loại.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "set_notebook_category",
+    description:
+      "Gán một notebook Kaggle (account_id + ref owner/notebook) vào một danh mục notebook của workspace; category_id null = bỏ phân loại. Không tạo danh mục mới.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        account_id: { type: "integer", description: "id kết nối Kaggle (list_compute_accounts)" },
+        ref: { type: "string", description: "owner/notebook" },
+        category_id: {
+          type: ["integer", "null"],
+          description: "id danh mục (list_notebook_categories); null = bỏ phân loại",
+        },
+      },
+      required: ["account_id", "ref", "category_id"],
+    },
   },
   {
     name: "list_runs",
@@ -680,6 +705,10 @@ async function callTool(s: Scope, name: string, args: Record<string, unknown>) {
           [s.workspaceId, s.userId],
         )
       ).rows;
+    case "list_notebook_categories":
+      return await listNotebookCategories(s);
+    case "set_notebook_category":
+      return await setNotebookCategory(s, args.account_id, args.ref, args.category_id);
     case "list_runs": {
       const str = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : undefined);
       const r = await listRuns(s, {
