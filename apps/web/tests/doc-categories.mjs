@@ -287,6 +287,45 @@ ok(`a result upload is refused (${upload.status})`);
 assert.ok((await request("/api/docs?kind=result", { cookie: a })).body.items.some((d) => d.id === result.body.id));
 ok("list filters by kind=result");
 
+// 3b. MCP
+const tools = (
+  await request("/api/mcp", {
+    method: "POST",
+    bearer: tA,
+    origin: null,
+    body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+  })
+).body.result.tools;
+assert.ok(tools.some((t) => t.name === "list_doc_categories"));
+ok("MCP lists list_doc_categories");
+const viaMcp = await tool(tA, "list_doc_categories", {});
+assert.equal(viaMcp.isError, false, viaMcp.text);
+assert.ok(viaMcp.data.some((x) => x.id === other.id));
+assert.ok(!viaMcp.data.some((x) => x.id === bCat.body.id));
+ok("list_doc_categories returns only the token's workspace");
+const mcpResult = await tool(tA, "create_doc", {
+  kind: "result",
+  title: `Kết quả MCP ${stamp}`,
+  format: "markdown",
+  body: "AI viết kết luận",
+  run_ids: runIds.slice(2, 5),
+  category_id: other.id,
+});
+assert.equal(mcpResult.isError, false, mcpResult.text);
+const mcpDoc = (await request(`/api/docs/${mcpResult.data.id}`, { cookie: a })).body;
+assert.equal(mcpDoc.kind, "result");
+assert.equal(mcpDoc.category_id, other.id);
+assert.equal(mcpDoc.runs.length, 3);
+ok("create_doc makes a result doc with runs and a category");
+const filtered = await tool(tA, "list_docs", { category: other.id });
+assert.ok(filtered.data.items.some((d) => d.id === mcpResult.data.id));
+assert.ok(!filtered.data.items.some((d) => d.id === result.body.id));
+ok("list_docs filters by category");
+const moved = await tool(tA, "update_doc", { id: mcpResult.data.id, category_id: null });
+assert.equal(moved.isError, false, moved.text);
+assert.equal((await request(`/api/docs/${mcpResult.data.id}`, { cookie: a })).body.category_id, null);
+ok("update_doc clears the category");
+
 // 4. Limit (keep last: fills the workspace with categories)
 const have = (await request("/api/docs/categories", { cookie: a })).body.length;
 for (let i = have; i < 50; i++) {
