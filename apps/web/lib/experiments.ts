@@ -164,7 +164,8 @@ export function parseLogMarkers(text: string) {
   return found ? { config: sanitizeConfig(config), metrics, history: sanitizeHistory(history) } : null;
 }
 
-const OUTPUT_HOST = /(^|\.)(googleapis\.com|googleusercontent\.com|kaggle\.com|kaggleusercontent\.com|kaggle\.net)$/i;
+export const OUTPUT_HOST =
+  /(^|\.)(googleapis\.com|googleusercontent\.com|kaggle\.com|kaggleusercontent\.com|kaggle\.net)$/i;
 /** Downloads ros_run.json from Kaggle output storage (https + Kaggle/Google hosts only, max 2 MB). */
 async function fetchRunFile(url: string) {
   let u: URL;

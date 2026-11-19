@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import type { Account, SyncData } from "./connector-screens";
 import RequestsPanel from "./run-requests-panel";
+import RunOutputs from "./run-outputs";
 
 type Scalar = string | number | boolean | null;
 type Run = {
@@ -1228,6 +1229,8 @@ function Drawer({
         ) : (
           <p className="rn-muted">Không có bản chụp code cho run này.</p>
         )}
+
+        {run.source === "kaggle" && run.account_id && run.ref && <RunOutputs key={run.id} runId={run.id} />}
 
         {run.can_delete !== false ? (
           <div className="rn-danger">
