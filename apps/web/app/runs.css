@@ -1631,3 +1631,7 @@ thead .rn-cmp-key {
 .nav-badge.running {
   background: #2563eb;
 }
+.rq-status.s-saved {
+  background: #f1f5f9;
+  color: #475569;
+}

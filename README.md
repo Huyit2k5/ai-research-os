@@ -83,6 +83,8 @@ AI không tự tốn GPU: tool MCP `push_notebook` chỉ **đề xuất** một 
 
 Khi duyệt, app gửi code lên Kaggle bằng kết nối của workspace (`SaveKernel`, Save & Run All). Cấu hình không ghi rõ được giữ như version hiện tại, kể cả dataset (Kaggle xóa dataset nếu không gửi lại). Hết quota GPU thì không gửi. Đang chạy thì trang yêu cầu có log trực tiếp; chạy xong, run được thu vào Thí nghiệm và gắn vào ý tưởng (ý tưởng Mới chuyển sang Đang thử khi duyệt). Trạng thái chỉ cập nhật khi có người mở tab **Đang chạy**/trang yêu cầu, hoặc AI gọi `get_run_request`.
 
+**Lưu, không chạy (Quick Save):** người duyệt bấm nút này, hoặc AI gửi `run: false`, thì app lưu code thành version mới trên Kaggle mà không chạy cell nào (trạng thái **Đã lưu**, không tốn quota, không thu run). **Giới hạn thời gian chạy:** chọn trong hộp Chạy hoặc AI gửi `timeout_minutes` (1–720); Kaggle tự dừng khi hết giờ. Để trống thì không đặt giới hạn riêng, chỉ còn giới hạn phiên của Kaggle.
+
 Người cũng chạy trực tiếp được: nút **Chạy ▶** ở Notebooks (chạy lại code version hiện tại) và **Chạy lại version này** ở trang code của run. Yêu cầu chờ quá 7 ngày hết hạn; tối đa 50 yêu cầu chờ mỗi workspace.
 
 ## Tài liệu (ý tưởng, báo cáo, file)

@@ -265,7 +265,7 @@ export async function captureRun(
   const current = Number(meta.currentVersionNumber),
     version = opts.version ?? (Number.isInteger(current) && current > 0 ? current : null);
   if (opts.version !== undefined && opts.version !== current) source = null; // code snapshot only matches the current version
-  const req = { userName, kernelSlug, ...(opts.version !== undefined ? { versionLabel: String(opts.version) } : {}) },
+  const req = { userName, kernelSlug, ...(opts.version !== undefined ? { versionLabel: `v${opts.version}` } : {}) },
     isRunFile = (f: Record<string, unknown>) =>
       typeof f.fileName === "string" && /(^|\/)ros_run\.json$/.test(f.fileName) && typeof f.url === "string";
   const out = await kaggleCall(token, "ListKernelSessionOutput", req);

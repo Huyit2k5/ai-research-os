@@ -13,6 +13,8 @@ export type RunRequest = {
     competition_sources?: string[];
     kernel_sources?: string[];
     model_sources?: string[];
+    run?: boolean;
+    timeout_minutes?: number;
   };
   summary: string;
   idea_id: number | null;
@@ -42,6 +44,7 @@ export const REQUEST_STATUS: Record<string, string> = {
   rejected: "Đã từ chối",
   cancelled: "Đã hủy",
   expired: "Hết hạn",
+  saved: "Đã lưu (không chạy)",
 };
 export const MACHINE_LABEL: Record<string, string> = { t4x2: "GPU T4 ×2", l4: "GPU L4", tpu: "TPU v5e-8", cpu: "CPU" };
 export const machineOf = (r: Pick<RunRequest, "settings" | "ref">) =>
@@ -50,11 +53,21 @@ export const machineOf = (r: Pick<RunRequest, "settings" | "ref">) =>
 export const settingNotes = (r: Pick<RunRequest, "settings">) =>
   [
     r.settings.is_private === false ? "⚠ Công khai" : "",
+    r.settings.run === false ? "chỉ lưu, không chạy" : "",
+    r.settings.timeout_minutes ? `tối đa ${durationLabel(r.settings.timeout_minutes)}` : "",
     r.settings.enable_internet ? "internet" : "",
     ...(["dataset_sources", "competition_sources", "kernel_sources", "model_sources"] as const).flatMap(
       (k) => r.settings[k] ?? [],
     ),
   ].filter(Boolean);
+export const durationLabel = (minutes: number) =>
+  minutes % 60 === 0
+    ? `${minutes / 60} giờ`
+    : minutes > 60
+      ? `${Math.floor(minutes / 60)} giờ ${minutes % 60} phút`
+      : `${minutes} phút`;
+/** Choices offered for "Giới hạn thời gian chạy"; empty = no limit of our own. */
+export const TIMEOUT_CHOICES = [30, 60, 120, 240, 540];
 export const VIA_LABEL: Record<string, string> = { mcp: "AI qua MCP", api: "API", web: "Web" };
 export const ago = (iso: string) => {
   const m = Math.round((Date.now() - Date.parse(iso)) / 60000);

@@ -4,10 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, ExternalLink, PlayCircle, X } from "lucide-react";
 import {
   ago,
+  durationLabel,
   machineOf,
   MACHINE_LABEL,
   REQUEST_STATUS,
   settingNotes,
+  TIMEOUT_CHOICES,
   VIA_LABEL,
   type RunRequest,
 } from "./run-request-shared";
@@ -117,7 +119,8 @@ export default function RequestsPanel({ status, onChange }: { status: "pending" 
                   Xem code
                 </a>
                 <button className="primary" disabled={busy === r.id} onClick={() => void act(r, "approve")}>
-                  <Check size={15} /> {busy === r.id ? "Đang gửi..." : "Duyệt & chạy"}
+                  <Check size={15} />{" "}
+                  {busy === r.id ? "Đang gửi..." : r.settings.run === false ? "Duyệt & lưu" : "Duyệt & chạy"}
                 </button>
                 <button
                   className="secondary"
@@ -179,6 +182,7 @@ export function RunModal({
 }) {
   const [machine, setMachine] = useState(""),
     [internet, setInternet] = useState(""),
+    [timeout, setTimeoutMinutes] = useState(""),
     [idea, setIdea] = useState(""),
     [ideas, setIdeas] = useState<Idea[]>([]);
   const [busy, setBusy] = useState(false),
@@ -200,6 +204,7 @@ export function RunModal({
           ref: refName,
           ...(machine ? { machine } : {}),
           ...(internet ? { enable_internet: internet === "on" } : {}),
+          ...(timeout ? { timeout_minutes: Number(timeout) } : {}),
           ...(idea ? { idea_id: Number(idea) } : {}),
         }),
       );
@@ -241,6 +246,17 @@ export function RunModal({
           </div>
         ) : (
           <>
+            <label>
+              Giới hạn thời gian chạy
+              <select value={timeout} onChange={(e) => setTimeoutMinutes(e.target.value)}>
+                <option value="">Không giới hạn</option>
+                {TIMEOUT_CHOICES.map((m) => (
+                  <option key={m} value={m}>
+                    Tối đa {durationLabel(m)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Máy
               <select value={machine} onChange={(e) => setMachine(e.target.value)}>
