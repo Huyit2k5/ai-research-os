@@ -16,6 +16,7 @@ export async function GET(req: Request) {
         kind: v("kind"),
         status: v("status"),
         tag: v("tag"),
+        category: sp.get("category") === "none" ? "none" : Number(sp.get("category")) || undefined,
         limit: Number(sp.get("limit")) || 50,
         offset: Number(sp.get("offset")) || 0,
       }),

@@ -13,7 +13,7 @@ export function initDocs() {
   ready ??= (async () => {
     await initExperiments();
     await db.query(`
-    CREATE TABLE IF NOT EXISTS documents (id SERIAL PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES organization(id) ON DELETE CASCADE, owner_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('idea','report','other')), title TEXT NOT NULL, status TEXT CHECK (status IN ('new','trying','chosen','dropped')), format TEXT NOT NULL CHECK (format IN ('markdown','html','file')), body TEXT, file_key TEXT UNIQUE, file_name TEXT, file_type TEXT, file_size BIGINT, upload_state TEXT CHECK (upload_state IN ('pending','ready')), tags TEXT[] NOT NULL DEFAULT '{}', created_via TEXT NOT NULL DEFAULT 'web' CHECK (created_via IN ('web','api')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT REFERENCES "user"(id) ON DELETE SET NULL);
+    CREATE TABLE IF NOT EXISTS documents (id SERIAL PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES organization(id) ON DELETE CASCADE, owner_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK (kind IN ('idea','result','report','other')), title TEXT NOT NULL, status TEXT CHECK (status IN ('new','trying','chosen','dropped')), format TEXT NOT NULL CHECK (format IN ('markdown','html','file')), body TEXT, file_key TEXT UNIQUE, file_name TEXT, file_type TEXT, file_size BIGINT, upload_state TEXT CHECK (upload_state IN ('pending','ready')), tags TEXT[] NOT NULL DEFAULT '{}', created_via TEXT NOT NULL DEFAULT 'web' CHECK (created_via IN ('web','api')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_by TEXT REFERENCES "user"(id) ON DELETE SET NULL);
     CREATE INDEX IF NOT EXISTS documents_ws_idx ON documents(workspace_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS documents_tags_idx ON documents USING GIN (tags);
     CREATE TABLE IF NOT EXISTS document_papers (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE, PRIMARY KEY (document_id, paper_id));
@@ -21,7 +21,12 @@ export function initDocs() {
     -- RLS without policies keeps Supabase's public Data API out; the owning role used here bypasses it.
     -- 'gone' = deleted or failed upload whose presigned PUT may still be used: hidden, still counted, swept after 1 hour.
     ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_upload_state_check; ALTER TABLE documents ADD CONSTRAINT documents_upload_state_check CHECK (upload_state IN ('pending','ready','gone'));
-    ALTER TABLE documents ENABLE ROW LEVEL SECURITY; ALTER TABLE document_papers ENABLE ROW LEVEL SECURITY; ALTER TABLE document_runs ENABLE ROW LEVEL SECURITY`);
+    -- Categories are workspace folders on top of kinds; deleting one leaves its docs uncategorized.
+    CREATE TABLE IF NOT EXISTS doc_categories (id SERIAL PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES organization(id) ON DELETE CASCADE, name TEXT NOT NULL, created_by TEXT REFERENCES "user"(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+    CREATE UNIQUE INDEX IF NOT EXISTS doc_categories_name_idx ON doc_categories(workspace_id, lower(name));
+    ALTER TABLE documents ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES doc_categories(id) ON DELETE SET NULL;
+    ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_kind_check; ALTER TABLE documents ADD CONSTRAINT documents_kind_check CHECK (kind IN ('idea','result','report','other'));
+    ALTER TABLE documents ENABLE ROW LEVEL SECURITY; ALTER TABLE document_papers ENABLE ROW LEVEL SECURITY; ALTER TABLE document_runs ENABLE ROW LEVEL SECURITY; ALTER TABLE doc_categories ENABLE ROW LEVEL SECURITY`);
   })().catch((err) => {
     ready = undefined;
     throw err;
@@ -29,13 +34,17 @@ export function initDocs() {
   return ready;
 }
 
-export const DOC_KINDS = ["idea", "report", "other"] as const,
+export const DOC_KINDS = ["idea", "result", "report", "other"] as const,
   IDEA_STATUSES = ["new", "trying", "chosen", "dropped"] as const;
 export const MAX_DOCS = 5000,
   MAX_BODY = 512 * 1024,
   MAX_TITLE = 300,
   MAX_LINKS = 50,
-  MAX_FILE = 25 * 1024 * 1024;
+  MAX_FILE = 25 * 1024 * 1024,
+  MAX_CATEGORIES = 50,
+  MAX_CATEGORY_NAME = 60,
+  // A result page compares its runs, and a comparison takes at most 10.
+  MAX_RESULT_RUNS = 10;
 /** Served inline from the store; everything else (SVG, Word, …) is forced to download. */
 export const INLINE_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "text/html"];
 /** Project-wide cap (R2's free 10 GB is for the whole account, shared by every workspace). */
@@ -56,13 +65,15 @@ export type DocRow = {
   can_delete: boolean;
   paper_count: number;
   run_count: number;
+  category_id: number | null;
+  category_name: string | null;
   created_at: string;
   updated_at: string;
 };
 
-const FIELDS = `d.id, d.kind, d.title, d.status, d.format, d.tags, d.file_name, d.file_type, d.file_size::float8 AS file_size, d.created_via, d.created_at, d.updated_at, d.owner_id, u.name AS created_by,
+const FIELDS = `d.id, d.kind, d.title, d.status, d.format, d.tags, d.file_name, d.file_type, d.file_size::float8 AS file_size, d.created_via, d.created_at, d.updated_at, d.owner_id, u.name AS created_by, d.category_id, dc.name AS category_name,
   (SELECT COUNT(*)::int FROM document_papers dp WHERE dp.document_id=d.id) AS paper_count, (SELECT COUNT(*)::int FROM document_runs dr WHERE dr.document_id=d.id) AS run_count`;
-const FROM = `documents d LEFT JOIN "user" u ON u.id=d.owner_id`;
+const FROM = `documents d LEFT JOIN "user" u ON u.id=d.owner_id LEFT JOIN doc_categories dc ON dc.id=d.category_id`;
 const shape = (s: Scope, r: Record<string, unknown>) => {
   const { owner_id, ...rest } = r;
   return { ...rest, can_delete: canManage(s, owner_id) } as DocRow;
@@ -80,7 +91,7 @@ const like = (q: string) =>
 
 const kindOf = (v: unknown) => {
   if (!(DOC_KINDS as readonly unknown[]).includes(v))
-    throw new AppError(422, "Loại tài liệu phải là idea, report hoặc other.");
+    throw new AppError(422, "Loại tài liệu phải là idea, result, report hoặc other.");
   return v as string;
 };
 const statusOf = (v: unknown) => {
@@ -144,6 +155,26 @@ async function setLinks(c: PoolClient, s: Scope, docId: number, f: Record<string
       await c.query(`INSERT INTO ${link} (document_id, ${col}) SELECT $1, unnest($2::int[])`, [docId, ids]);
   }
 }
+/** undefined = not given; null = clear; otherwise it must be a category of the caller's workspace. */
+async function categoryOf(s: Scope, raw: unknown): Promise<number | null | undefined> {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  const id = Number(raw);
+  const found =
+    Number.isInteger(id) &&
+    id > 0 &&
+    id <= 2147483647 &&
+    (await db.query("SELECT 1 FROM doc_categories WHERE id=$1 AND workspace_id=$2", [id, s.workspaceId])).rows.length >
+      0;
+  if (!found) throw new AppError(422, "category_id không phải danh mục của workspace.");
+  return id;
+}
+/** The 10-run rule, checked after links change inside the same transaction so a failure changes nothing. */
+async function assertResultRuns(c: PoolClient, docId: number, kind: string) {
+  if (kind !== "result") return;
+  const n = Number((await c.query("SELECT COUNT(*) FROM document_runs WHERE document_id=$1", [docId])).rows[0].count);
+  if (n > MAX_RESULT_RUNS) throw new AppError(422, `Trang kết quả gắn tối đa ${MAX_RESULT_RUNS} run.`);
+}
 async function tx<T>(fn: (c: PoolClient) => Promise<T>) {
   const c = await db.connect();
   try {
@@ -193,6 +224,7 @@ export type ListDocsOpts = {
   kind?: string;
   status?: string;
   tag?: string;
+  category?: number | "none";
   limit?: number;
   offset?: number;
 };
@@ -200,8 +232,15 @@ export async function listDocs(s: Scope, o: ListDocsOpts = {}) {
   await initDocs();
   const limit = Math.min(Math.max(Math.trunc(o.limit ?? 50) || 50, 1), 200),
     offset = Math.max(Math.trunc(o.offset ?? 0) || 0, 0);
-  const where = `d.workspace_id=$1 AND (d.upload_state IS NULL OR d.upload_state='ready') AND ($2='' OR d.title ILIKE '%'||$2||'%' OR d.body ILIKE '%'||$2||'%') AND ($3::text IS NULL OR d.kind=$3) AND ($4::text IS NULL OR d.status=$4) AND ($5::text IS NULL OR $5=ANY(d.tags))`;
-  const params = [s.workspaceId, like(o.q ?? ""), o.kind || null, o.status || null, o.tag || null];
+  const where = `d.workspace_id=$1 AND (d.upload_state IS NULL OR d.upload_state='ready') AND ($2='' OR d.title ILIKE '%'||$2||'%' OR d.body ILIKE '%'||$2||'%') AND ($3::text IS NULL OR d.kind=$3) AND ($4::text IS NULL OR d.status=$4) AND ($5::text IS NULL OR $5=ANY(d.tags)) AND ($6::text IS NULL OR ($6='none' AND d.category_id IS NULL) OR d.category_id::text=$6)`;
+  const params = [
+    s.workspaceId,
+    like(o.q ?? ""),
+    o.kind || null,
+    o.status || null,
+    o.tag || null,
+    o.category === undefined ? null : String(o.category),
+  ];
   const [items, total] = await Promise.all([
     db.query(
       `SELECT ${FIELDS} FROM ${FROM} WHERE ${where} ORDER BY d.updated_at DESC, d.id DESC LIMIT ${limit} OFFSET ${offset}`,
@@ -240,16 +279,18 @@ export async function createTextDoc(s: Scope, via: "web" | "api", f: Record<stri
   const b = baseFields(f),
     format = textFormat(f.format),
     body = bodyOf(f.body ?? "");
+  const categoryId = await categoryOf(s, f.category_id);
   await rateLimit(s.userId, "doc-write", 60, 60);
   await assertRoom(s);
   const id = await tx(async (c) => {
     const id = (
       await c.query(
-        "INSERT INTO documents (workspace_id, owner_id, kind, title, status, format, body, tags, created_via, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$2) RETURNING id",
-        [s.workspaceId, s.userId, b.kind, b.title, b.status, format, body, b.tags, via],
+        "INSERT INTO documents (workspace_id, owner_id, kind, title, status, format, body, tags, created_via, updated_by, category_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$2,$10) RETURNING id",
+        [s.workspaceId, s.userId, b.kind, b.title, b.status, format, body, b.tags, via, categoryId ?? null],
       )
     ).rows[0].id as number;
     await setLinks(c, s, id, f);
+    await assertResultRuns(c, id, b.kind);
     return id;
   });
   return row(s, id);
@@ -273,13 +314,21 @@ export async function updateDoc(s: Scope, idRaw: unknown, f: Record<string, unkn
   const title = f.title === undefined ? undefined : titleOf(f.title),
     body = f.body === undefined ? undefined : bodyOf(f.body),
     format = f.format === undefined ? undefined : textFormat(f.format),
-    tags = f.tags === undefined ? undefined : tagsOf(f.tags);
+    tags = f.tags === undefined ? undefined : tagsOf(f.tags),
+    categoryId = await categoryOf(s, f.category_id);
+  if (kind === "result" && cur.format === "file") {
+    throw new AppError(422, "Tài liệu dạng file không thể là trang kết quả.");
+  }
   await tx(async (c) => {
     await c.query(
       "UPDATE documents SET kind=$3, status=$4, title=COALESCE($5,title), body=COALESCE($6,body), format=COALESCE($7,format), tags=COALESCE($8,tags), updated_at=NOW(), updated_by=$9 WHERE id=$1 AND workspace_id=$2",
       [id, s.workspaceId, kind, status, title ?? null, body ?? null, format ?? null, tags ?? null, s.userId],
     );
+    if (categoryId !== undefined) {
+      await c.query("UPDATE documents SET category_id=$2 WHERE id=$1", [id, categoryId]);
+    }
     await setLinks(c, s, id, f);
+    await assertResultRuns(c, id, kind);
   });
   return row(s, id);
 }
@@ -318,6 +367,7 @@ const dropObject = (key: string) =>
 /** Step 1 of an upload: checks limits, reserves a pending row and returns a presigned PUT bound to type + size. */
 export async function startUpload(s: Scope, via: "web" | "api", f: Record<string, unknown>) {
   await initDocs();
+  if (f.kind === "result") throw new AppError(422, "Trang kết quả là văn bản, không upload file được.");
   if (!storageConfigured()) throw new AppError(503, "Chưa cấu hình kho file nên chưa upload được.");
   const fileName = fileNameOf(f.file_name),
     type = mimeOf(f.content_type),
@@ -325,6 +375,7 @@ export async function startUpload(s: Scope, via: "web" | "api", f: Record<string
   if (!Number.isInteger(size) || size < 1) throw new AppError(422, "File rỗng hoặc dung lượng không hợp lệ.");
   if (size > MAX_FILE) throw new AppError(413, "File vượt quá 25 MB.");
   const b = baseFields({ ...f, kind: f.kind ?? "other", title: f.title ?? fileName.slice(0, MAX_TITLE) });
+  const categoryId = await categoryOf(s, f.category_id);
   await rateLimit(s.userId, "doc-upload", 30, 60);
   // Uploads abandoned for over an hour are swept here, so they stop counting toward the limit.
   for (const old of (
@@ -340,8 +391,21 @@ export async function startUpload(s: Scope, via: "web" | "api", f: Record<string
   const id = await tx(async (c) => {
     const id = (
       await c.query(
-        "INSERT INTO documents (workspace_id, owner_id, kind, title, status, format, file_key, file_name, file_type, file_size, upload_state, tags, created_via, updated_by) VALUES ($1,$2,$3,$4,$5,'file',$6,$7,$8,$9,'pending',$10,$11,$2) RETURNING id",
-        [s.workspaceId, s.userId, b.kind, b.title, b.status, key, fileName, type, size, b.tags, via],
+        "INSERT INTO documents (workspace_id, owner_id, kind, title, status, format, file_key, file_name, file_type, file_size, upload_state, tags, created_via, updated_by, category_id) VALUES ($1,$2,$3,$4,$5,'file',$6,$7,$8,$9,'pending',$10,$11,$2,$12) RETURNING id",
+        [
+          s.workspaceId,
+          s.userId,
+          b.kind,
+          b.title,
+          b.status,
+          key,
+          fileName,
+          type,
+          size,
+          b.tags,
+          via,
+          categoryId ?? null,
+        ],
       )
     ).rows[0].id as number;
     await setLinks(c, s, id, f);
@@ -400,4 +464,95 @@ export async function fileUrl(s: Scope, idRaw: unknown, download: boolean) {
 export async function deleteDocAndFile(s: Scope, idRaw: unknown) {
   const { file_key } = await deleteDoc(s, idRaw);
   if (file_key) await dropObject(file_key);
+}
+
+export type Category = { id: number; name: string; doc_count: number; created_by: string | null; can_delete: boolean };
+
+const categoryName = (raw: unknown) => {
+  const name = typeof raw === "string" ? raw.trim().replace(/\s+/g, " ") : "";
+  if (!name || name.length > MAX_CATEGORY_NAME) {
+    throw new AppError(422, `Tên danh mục phải có từ 1 đến ${MAX_CATEGORY_NAME} ký tự.`);
+  }
+  return name;
+};
+const categoryIdOf = (v: unknown) => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1 || n > 2147483647) throw new AppError(404, "Không tìm thấy danh mục.");
+  return n;
+};
+const isDuplicate = (e: unknown) => (e as { code?: string })?.code === "23505";
+const CATEGORY_FIELDS = `c.id, c.name, c.created_by AS owner_id, u.name AS created_by,
+  (SELECT COUNT(*)::int FROM documents d WHERE d.category_id=c.id AND (d.upload_state IS NULL OR d.upload_state='ready')) AS doc_count`;
+const CATEGORY_FROM = `doc_categories c LEFT JOIN "user" u ON u.id=c.created_by`;
+const shapeCategory = (s: Scope, r: Record<string, unknown>) => {
+  const { owner_id, ...rest } = r;
+  return { ...rest, can_delete: canManage(s, owner_id) } as Category;
+};
+
+export async function listCategories(s: Scope): Promise<Category[]> {
+  await initDocs();
+  const rows = (
+    await db.query(`SELECT ${CATEGORY_FIELDS} FROM ${CATEGORY_FROM} WHERE c.workspace_id=$1 ORDER BY lower(c.name)`, [
+      s.workspaceId,
+    ])
+  ).rows;
+  return rows.map((r) => shapeCategory(s, r));
+}
+
+async function oneCategory(s: Scope, id: number) {
+  const r = (
+    await db.query(`SELECT ${CATEGORY_FIELDS} FROM ${CATEGORY_FROM} WHERE c.id=$1 AND c.workspace_id=$2`, [
+      id,
+      s.workspaceId,
+    ])
+  ).rows[0];
+  if (!r) throw new AppError(404, "Không tìm thấy danh mục.");
+  return shapeCategory(s, r);
+}
+
+export async function createCategory(s: Scope, rawName: unknown): Promise<Category> {
+  await initDocs();
+  const name = categoryName(rawName);
+  await rateLimit(s.userId, "doc-category", 60, 60);
+  const count = Number(
+    (await db.query("SELECT COUNT(*) FROM doc_categories WHERE workspace_id=$1", [s.workspaceId])).rows[0].count,
+  );
+  if (count >= MAX_CATEGORIES) throw new AppError(422, `Workspace đã có tối đa ${MAX_CATEGORIES} danh mục.`);
+  try {
+    const id = (
+      await db.query("INSERT INTO doc_categories (workspace_id, name, created_by) VALUES ($1,$2,$3) RETURNING id", [
+        s.workspaceId,
+        name,
+        s.userId,
+      ])
+    ).rows[0].id as number;
+    return oneCategory(s, id);
+  } catch (e) {
+    if (isDuplicate(e)) throw new AppError(409, "Đã có danh mục cùng tên.");
+    throw e;
+  }
+}
+
+/** Any member may rename. */
+export async function renameCategory(s: Scope, idRaw: unknown, rawName: unknown): Promise<Category> {
+  await initDocs();
+  const id = categoryIdOf(idRaw);
+  await oneCategory(s, id);
+  const name = categoryName(rawName);
+  await rateLimit(s.userId, "doc-category", 60, 60);
+  try {
+    await db.query("UPDATE doc_categories SET name=$3 WHERE id=$1 AND workspace_id=$2", [id, s.workspaceId, name]);
+  } catch (e) {
+    if (isDuplicate(e)) throw new AppError(409, "Đã có danh mục cùng tên.");
+    throw e;
+  }
+  return oneCategory(s, id);
+}
+
+/** Creator or workspace owner/admin. Documents in it become uncategorized (ON DELETE SET NULL). */
+export async function deleteCategory(s: Scope, idRaw: unknown) {
+  await initDocs();
+  const cat = await oneCategory(s, categoryIdOf(idRaw));
+  if (!cat.can_delete) throw new AppError(403, "Chỉ người tạo danh mục hoặc owner/admin được xóa.");
+  await db.query("DELETE FROM doc_categories WHERE id=$1 AND workspace_id=$2", [cat.id, s.workspaceId]);
 }

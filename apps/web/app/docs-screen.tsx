@@ -1,7 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { FilePlus2, FileText, Lightbulb, Paperclip, Search, Upload, X } from "lucide-react";
+import {
+  BarChart3,
+  FilePlus2,
+  FileText,
+  Folder,
+  Lightbulb,
+  Paperclip,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { Markdown } from "./notebook-view";
 
 export type Doc = {
@@ -19,11 +32,37 @@ export type Doc = {
   can_delete: boolean;
   paper_count: number;
   run_count: number;
+  category_id: number | null;
+  category_name: string | null;
   created_at: string;
   updated_at: string;
 };
 type Page = { total: number; items: Doc[] };
-export const KINDS: Record<string, string> = { idea: "Ý tưởng", report: "Báo cáo", other: "Khác" };
+export const KINDS: Record<string, string> = { idea: "Ý tưởng", result: "Kết quả", report: "Báo cáo", other: "Khác" };
+export type Category = { id: number; name: string; doc_count: number; can_delete: boolean };
+
+/** Category picker shared by the write/upload dialogs and the document page; "" = uncategorized. */
+export function CategorySelect({
+  categories,
+  value,
+  onChange,
+}: {
+  categories: Category[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Chưa phân loại</option>
+      {categories.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+const categoryBody = (v: string) => (v ? { category_id: Number(v) } : {});
 export const IDEA_STATUS: Record<string, string> = { new: "Mới", trying: "Đang thử", chosen: "Đã chọn", dropped: "Bỏ" };
 const PAGE = 50;
 
@@ -63,7 +102,7 @@ const tagsOf = (s: string) =>
 const openDoc = (id: number) => window.open(`/docs/${id}`, "_blank", "noopener");
 
 /** Upload in three steps so file bytes go straight to the store: reserve → PUT presigned URL → complete. */
-async function uploadFile(file: File, f: { kind: string; title: string; tags: string[] }) {
+async function uploadFile(file: File, f: { kind: string; title: string; tags: string[]; category: string }) {
   const start = await api<{ id: number; upload_url: string; headers: Record<string, string> }>(
     "/api/docs/uploads",
     "POST",
@@ -74,6 +113,7 @@ async function uploadFile(file: File, f: { kind: string; title: string; tags: st
       kind: f.kind,
       ...(f.title ? { title: f.title } : {}),
       tags: f.tags,
+      ...categoryBody(f.category),
     },
   );
   let put: Response;
@@ -86,8 +126,19 @@ async function uploadFile(file: File, f: { kind: string; title: string; tags: st
   return api<Doc>(`/api/docs/${start.id}/complete`, "POST");
 }
 
-function WriteModal({ close, done }: { close: () => void; done: (d: Doc) => void }) {
-  const [title, setTitle] = useState(""),
+function WriteModal({
+  close,
+  done,
+  categories,
+  initialCategory,
+}: {
+  close: () => void;
+  done: (d: Doc) => void;
+  categories: Category[];
+  initialCategory: string;
+}) {
+  const [category, setCategory] = useState(initialCategory),
+    [title, setTitle] = useState(""),
     [kind, setKind] = useState("idea"),
     [format, setFormat] = useState("markdown"),
     [body, setBody] = useState(""),
@@ -100,7 +151,16 @@ function WriteModal({ close, done }: { close: () => void; done: (d: Doc) => void
     setBusy(true);
     setErr("");
     try {
-      done(await api<Doc>("/api/docs", "POST", { title, kind, format, body, tags: tagsOf(tags) }));
+      done(
+        await api<Doc>("/api/docs", "POST", {
+          title,
+          kind,
+          format,
+          body,
+          tags: tagsOf(tags),
+          ...categoryBody(category),
+        }),
+      );
     } catch (x) {
       setErr(msg(x, "Không lưu được tài liệu."));
     } finally {
@@ -156,7 +216,17 @@ function WriteModal({ close, done }: { close: () => void; done: (d: Doc) => void
                 <option value="html">HTML</option>
               </select>
             </label>
+            <label>
+              Danh mục
+              <CategorySelect categories={categories} value={category} onChange={setCategory} />
+            </label>
           </div>
+          {kind === "result" && (
+            <p className="dc-muted">
+              Trang kết quả hiện bảng so sánh của các run được gắn. Gắn run ở trang tài liệu sau khi tạo, hoặc dùng nút
+              “Lưu thành kết quả” ở màn so sánh run. Phần nội dung là ghi chú, kết luận.
+            </p>
+          )}
           <div className="dc-tabs">
             <button type="button" className={!preview ? "on" : ""} onClick={() => setPreview(false)}>
               Soạn
@@ -201,8 +271,19 @@ function WriteModal({ close, done }: { close: () => void; done: (d: Doc) => void
   );
 }
 
-function UploadModal({ close, done }: { close: () => void; done: (d: Doc) => void }) {
-  const [file, setFile] = useState<File | null>(null),
+function UploadModal({
+  close,
+  done,
+  categories,
+  initialCategory,
+}: {
+  close: () => void;
+  done: (d: Doc) => void;
+  categories: Category[];
+  initialCategory: string;
+}) {
+  const [category, setCategory] = useState(initialCategory),
+    [file, setFile] = useState<File | null>(null),
     [kind, setKind] = useState("other"),
     [title, setTitle] = useState(""),
     [tags, setTags] = useState(""),
@@ -218,7 +299,7 @@ function UploadModal({ close, done }: { close: () => void; done: (d: Doc) => voi
     setBusy(true);
     setErr("");
     try {
-      done(await uploadFile(file, { kind, title: title.trim(), tags: tagsOf(tags) }));
+      done(await uploadFile(file, { kind, title: title.trim(), tags: tagsOf(tags), category }));
     } catch (x) {
       setErr(msg(x, "Không upload được file."));
     } finally {
@@ -273,12 +354,18 @@ function UploadModal({ close, done }: { close: () => void; done: (d: Doc) => voi
           <label>
             Loại
             <select value={kind} onChange={(e) => setKind(e.target.value)}>
-              {Object.entries(KINDS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
+              {Object.entries(KINDS)
+                .filter(([k]) => k !== "result")
+                .map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
             </select>
+          </label>
+          <label>
+            Danh mục
+            <CategorySelect categories={categories} value={category} onChange={setCategory} />
           </label>
           <label>
             Tag
@@ -308,6 +395,38 @@ export default function DocsScreen() {
     [q, setQ] = useState(""),
     [tag, setTag] = useState(""),
     [modal, setModal] = useState<"write" | "upload" | null>(null);
+  // "" = all, "none" = uncategorized, otherwise a category id
+  const [category, setCategory] = useState(""),
+    [categories, setCategories] = useState<Category[]>([]);
+  const loadCategories = useCallback(async () => {
+    try {
+      setCategories(await api<Category[]>("/api/docs/categories"));
+    } catch (e) {
+      setError(msg(e, "Không tải được danh mục."));
+    }
+  }, []);
+  useEffect(() => {
+    void loadCategories();
+  }, [loadCategories]);
+  async function categoryAction(action: "create" | "rename" | "delete", c?: Category) {
+    try {
+      if (action === "delete" && c) {
+        if (!window.confirm(`Xóa danh mục “${c.name}”? ${c.doc_count} tài liệu trong đó sẽ chuyển về Chưa phân loại.`))
+          return;
+        await api(`/api/docs/categories/${c.id}`, "DELETE");
+        if (category === String(c.id)) setCategory("");
+      } else {
+        const name = window.prompt(action === "create" ? "Tên danh mục mới" : "Đổi tên danh mục", c?.name ?? "");
+        if (!name?.trim()) return;
+        if (action === "create") await api("/api/docs/categories", "POST", { name });
+        else if (c) await api(`/api/docs/categories/${c.id}`, "PATCH", { name });
+      }
+      await loadCategories();
+      void reload();
+    } catch (e) {
+      setError(msg(e, "Không lưu được danh mục."));
+    }
+  }
   const reqId = useRef(0);
   const qs = useCallback(
     (offset: number) =>
@@ -318,8 +437,9 @@ export default function DocsScreen() {
         ...(kind ? { kind } : {}),
         ...(kind === "idea" && status ? { status } : {}),
         ...(tag ? { tag } : {}),
+        ...(category ? { category } : {}),
       }).toString(),
-    [q, kind, status, tag],
+    [q, kind, status, tag, category],
   );
   const reload = useCallback(async () => {
     const id = ++reqId.current;
@@ -356,6 +476,7 @@ export default function DocsScreen() {
   const created = (d: Doc) => {
     setModal(null);
     void reload();
+    void loadCategories();
     openDoc(d.id);
   };
 
@@ -389,148 +510,208 @@ export default function DocsScreen() {
           </button>
         </div>
       )}
-      <section className="panel dc-toolbar">
-        <div className="dc-kinds" role="tablist" aria-label="Loại tài liệu">
-          {[["", "Tất cả"], ...Object.entries(KINDS)].map(([k, v]) => (
-            <button
-              key={k}
-              role="tab"
-              aria-selected={kind === k}
-              className={kind === k ? "on" : ""}
-              onClick={() => {
-                setKind(k);
-                setStatus("");
-              }}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
-        <div className="dc-filters">
-          <label className="dc-search">
-            <Search size={15} />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Tìm trong tiêu đề và nội dung"
-              aria-label="Tìm tài liệu"
-            />
-          </label>
-          {kind === "idea" && (
-            <label>
-              Trạng thái
-              <select value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="">Tất cả</option>
-                {Object.entries(IDEA_STATUS).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label>
-            Tag
-            <input value={tag} onChange={(e) => setTag(e.target.value.trim())} placeholder="vd: tuần-46" />
-          </label>
-        </div>
-      </section>
-      <section className="panel">
-        <div className="panel-heading">
-          <div>
-            <h2>
-              Danh sách <span className="count">{total}</span>
-            </h2>
-            <p>Mới cập nhật trước.</p>
-          </div>
-        </div>
-        {items.length > 0 && (
-          <div className="table-wrap">
-            <table className="dc-table">
-              <thead>
-                <tr>
-                  <th>TÀI LIỆU</th>
-                  <th>LOẠI</th>
-                  <th>LIÊN KẾT</th>
-                  <th>NGƯỜI TẠO</th>
-                  <th>CẬP NHẬT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((d) => (
-                  <tr key={d.id} onClick={() => openDoc(d.id)} className="dc-rowlink">
-                    <td>
-                      <button
-                        className="dc-title"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openDoc(d.id);
-                        }}
-                      >
-                        {d.format === "file" ? (
-                          <Paperclip size={15} />
-                        ) : d.kind === "idea" ? (
-                          <Lightbulb size={15} />
-                        ) : (
-                          <FileText size={15} />
-                        )}
-                        <b>{d.title}</b>
-                      </button>
-                      {d.format === "file" && (
-                        <small className="dc-muted">
-                          {d.file_name} · {size(d.file_size)}
-                        </small>
-                      )}
-                      {d.tags.length > 0 && (
-                        <span className="dc-tags">
-                          {d.tags.slice(0, 3).map((t) => (
-                            <span key={t} className="dc-tag">
-                              {t}
-                            </span>
-                          ))}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={`dc-kind k-${d.kind}`}>{KINDS[d.kind] ?? d.kind}</span>
-                      {d.status && (
-                        <span className={`dc-status s-${d.status}`}>{IDEA_STATUS[d.status] ?? d.status}</span>
-                      )}
-                    </td>
-                    <td className="time">
-                      {d.paper_count} paper · {d.run_count} run
-                    </td>
-                    <td className="time">
-                      {d.created_by ?? "—"}
-                      {d.created_via === "api" && <small className="dc-api">qua MCP/API</small>}
-                    </td>
-                    <td className="time">{when(d.updated_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {loading && items.length === 0 && <div className="empty">Đang tải...</div>}
-        {!loading && total === 0 && (
-          <div className="empty">
-            <div className="empty-icon">
-              <FileText size={22} />
-            </div>
-            <h3>{q || kind || tag ? "Không có tài liệu khớp bộ lọc" : "Chưa có tài liệu nào"}</h3>
-            <p>
-              Viết ý tưởng đầu tiên, upload file, hoặc để AI tạo qua tool MCP <code>create_doc</code>.
-            </p>
-          </div>
-        )}
-        {items.length < total && (
-          <button className="secondary dc-more" disabled={loading} onClick={() => void more()}>
-            {loading ? "Đang tải..." : `Tải thêm (${total - items.length} còn lại)`}
+      <div className="dc-layout">
+        <nav className="panel dc-cats" aria-label="Danh mục">
+          <div className="dc-cats-head">DANH MỤC</div>
+          <button className={category === "" ? "on" : ""} onClick={() => setCategory("")}>
+            <Folder size={14} /> Tất cả
           </button>
-        )}
-      </section>
-      {modal === "write" && <WriteModal close={() => setModal(null)} done={created} />}
-      {modal === "upload" && <UploadModal close={() => setModal(null)} done={created} />}
+          <button className={category === "none" ? "on" : ""} onClick={() => setCategory("none")}>
+            <Folder size={14} /> Chưa phân loại
+          </button>
+          {categories.map((c) => (
+            <div key={c.id} className={`dc-cat ${category === String(c.id) ? "on" : ""}`}>
+              <button onClick={() => setCategory(String(c.id))} title={c.name}>
+                <Folder size={14} /> <span>{c.name}</span> <small>{c.doc_count}</small>
+              </button>
+              <button
+                className="dc-cat-icon"
+                onClick={() => void categoryAction("rename", c)}
+                aria-label={`Đổi tên ${c.name}`}
+              >
+                <Pencil size={12} />
+              </button>
+              {c.can_delete && (
+                <button
+                  className="dc-cat-icon"
+                  onClick={() => void categoryAction("delete", c)}
+                  aria-label={`Xóa ${c.name}`}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+          <button className="dc-cat-add" onClick={() => void categoryAction("create")}>
+            <Plus size={14} /> Thêm danh mục
+          </button>
+        </nav>
+        <div className="dc-main">
+          <section className="panel dc-toolbar">
+            <div className="dc-kinds" role="tablist" aria-label="Loại tài liệu">
+              {[["", "Tất cả"], ...Object.entries(KINDS)].map(([k, v]) => (
+                <button
+                  key={k}
+                  role="tab"
+                  aria-selected={kind === k}
+                  className={kind === k ? "on" : ""}
+                  onClick={() => {
+                    setKind(k);
+                    setStatus("");
+                  }}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+            <div className="dc-filters">
+              <label className="dc-search">
+                <Search size={15} />
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Tìm trong tiêu đề và nội dung"
+                  aria-label="Tìm tài liệu"
+                />
+              </label>
+              {kind === "idea" && (
+                <label>
+                  Trạng thái
+                  <select value={status} onChange={(e) => setStatus(e.target.value)}>
+                    <option value="">Tất cả</option>
+                    {Object.entries(IDEA_STATUS).map(([k, v]) => (
+                      <option key={k} value={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label>
+                Tag
+                <input value={tag} onChange={(e) => setTag(e.target.value.trim())} placeholder="vd: tuần-46" />
+              </label>
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>
+                  Danh sách <span className="count">{total}</span>
+                </h2>
+                <p>Mới cập nhật trước.</p>
+              </div>
+            </div>
+            {items.length > 0 && (
+              <div className="table-wrap">
+                <table className="dc-table">
+                  <thead>
+                    <tr>
+                      <th>TÀI LIỆU</th>
+                      <th>LOẠI</th>
+                      <th>LIÊN KẾT</th>
+                      <th>NGƯỜI TẠO</th>
+                      <th>CẬP NHẬT</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((d) => (
+                      <tr key={d.id} onClick={() => openDoc(d.id)} className="dc-rowlink">
+                        <td>
+                          <button
+                            className="dc-title"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openDoc(d.id);
+                            }}
+                          >
+                            {d.format === "file" ? (
+                              <Paperclip size={15} />
+                            ) : d.kind === "idea" ? (
+                              <Lightbulb size={15} />
+                            ) : d.kind === "result" ? (
+                              <BarChart3 size={15} />
+                            ) : (
+                              <FileText size={15} />
+                            )}
+                            <b>{d.title}</b>
+                          </button>
+                          {d.format === "file" && (
+                            <small className="dc-muted">
+                              {d.file_name} · {size(d.file_size)}
+                            </small>
+                          )}
+                          {d.tags.length > 0 && (
+                            <span className="dc-tags">
+                              {d.tags.slice(0, 3).map((t) => (
+                                <span key={t} className="dc-tag">
+                                  {t}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`dc-kind k-${d.kind}`}>{KINDS[d.kind] ?? d.kind}</span>
+                          {d.status && (
+                            <span className={`dc-status s-${d.status}`}>{IDEA_STATUS[d.status] ?? d.status}</span>
+                          )}
+                          {d.category_name && (
+                            <small className="dc-muted dc-catname">
+                              <Folder size={11} /> {d.category_name}
+                            </small>
+                          )}
+                        </td>
+                        <td className="time">
+                          {d.paper_count} paper · {d.run_count} run
+                        </td>
+                        <td className="time">
+                          {d.created_by ?? "—"}
+                          {d.created_via === "api" && <small className="dc-api">qua MCP/API</small>}
+                        </td>
+                        <td className="time">{when(d.updated_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {loading && items.length === 0 && <div className="empty">Đang tải...</div>}
+            {!loading && total === 0 && (
+              <div className="empty">
+                <div className="empty-icon">
+                  <FileText size={22} />
+                </div>
+                <h3>{q || kind || tag || category ? "Không có tài liệu khớp bộ lọc" : "Chưa có tài liệu nào"}</h3>
+                <p>
+                  Viết ý tưởng đầu tiên, upload file, hoặc để AI tạo qua tool MCP <code>create_doc</code>.
+                </p>
+              </div>
+            )}
+            {items.length < total && (
+              <button className="secondary dc-more" disabled={loading} onClick={() => void more()}>
+                {loading ? "Đang tải..." : `Tải thêm (${total - items.length} còn lại)`}
+              </button>
+            )}
+          </section>
+        </div>
+      </div>
+      {modal === "write" && (
+        <WriteModal
+          close={() => setModal(null)}
+          done={created}
+          categories={categories}
+          initialCategory={category === "none" ? "" : category}
+        />
+      )}
+      {modal === "upload" && (
+        <UploadModal
+          close={() => setModal(null)}
+          done={created}
+          categories={categories}
+          initialCategory={category === "none" ? "" : category}
+        />
+      )}
     </div>
   );
 }

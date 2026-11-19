@@ -38,6 +38,7 @@ import {
   DOC_KINDS,
   getDoc,
   IDEA_STATUSES,
+  listCategories,
   listDocs,
   updateDoc,
 } from "../../../lib/documents";
@@ -379,6 +380,10 @@ const TOOLS: Tool[] = [
         kind: { type: "string", enum: [...DOC_KINDS] },
         status: { type: "string", enum: [...IDEA_STATUSES] },
         tag: { type: "string" },
+        category: {
+          type: ["integer", "string"],
+          description: 'id danh mục (list_doc_categories), hoặc "none" = chưa phân loại',
+        },
         limit: { type: "integer", minimum: 1, maximum: 100 },
         offset: { type: "integer", minimum: 0 },
       },
@@ -396,11 +401,15 @@ const TOOLS: Tool[] = [
   {
     name: "create_doc",
     description:
-      "Tạo tài liệu dạng văn bản trong workspace: ý tưởng (mặc định trạng thái new), báo cáo hoặc khác, viết bằng Markdown hoặc HTML, có thể liên kết paper và run cùng workspace.",
+      "Tạo tài liệu dạng văn bản trong workspace: ý tưởng (mặc định trạng thái new), trang kết quả, báo cáo hoặc khác, viết bằng Markdown hoặc HTML, có thể liên kết paper và run cùng workspace. Trang kết quả (kind result) với run_ids (2–10 run) tự hiện bảng so sánh metric, config khác nhau và biểu đồ khi mở trên web: chỉ cần viết phần kết luận vào body, không cần tự dựng bảng. category_id lấy từ list_doc_categories.",
     inputSchema: {
       type: "object",
       properties: {
-        kind: { type: "string", enum: [...DOC_KINDS], description: "idea = ý tưởng, report = báo cáo, other = khác" },
+        kind: {
+          type: "string",
+          enum: [...DOC_KINDS],
+          description: "idea = ý tưởng, result = trang kết quả thực nghiệm, report = báo cáo, other = khác",
+        },
         title: { type: "string", maxLength: 300 },
         format: { type: "string", enum: ["markdown", "html"] },
         body: {
@@ -420,6 +429,10 @@ const TOOLS: Tool[] = [
           description: "Paper liên kết (thay toàn bộ danh sách)",
         },
         run_ids: { type: "array", items: { type: "integer" }, description: "Run liên kết (thay toàn bộ danh sách)" },
+        category_id: {
+          type: ["integer", "null"],
+          description: "Danh mục (list_doc_categories); null = bỏ danh mục",
+        },
       },
       required: ["kind", "title", "format", "body"],
     },
@@ -432,7 +445,11 @@ const TOOLS: Tool[] = [
       type: "object",
       properties: {
         id: { type: "integer" },
-        kind: { type: "string", enum: [...DOC_KINDS], description: "idea = ý tưởng, report = báo cáo, other = khác" },
+        kind: {
+          type: "string",
+          enum: [...DOC_KINDS],
+          description: "idea = ý tưởng, result = trang kết quả thực nghiệm, report = báo cáo, other = khác",
+        },
         title: { type: "string", maxLength: 300 },
         format: { type: "string", enum: ["markdown", "html"] },
         body: {
@@ -452,9 +469,20 @@ const TOOLS: Tool[] = [
           description: "Paper liên kết (thay toàn bộ danh sách)",
         },
         run_ids: { type: "array", items: { type: "integer" }, description: "Run liên kết (thay toàn bộ danh sách)" },
+        category_id: {
+          type: ["integer", "null"],
+          description: "Danh mục (list_doc_categories); null = bỏ danh mục",
+        },
       },
       required: ["id"],
     },
+  },
+  {
+    name: "list_doc_categories",
+    description:
+      "Liệt kê danh mục tài liệu của workspace (id, tên, số tài liệu). Dùng id để gán category_id hoặc lọc list_docs.",
+    inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true },
   },
   {
     name: "delete_doc",
@@ -705,10 +733,13 @@ async function callTool(s: Scope, name: string, args: Record<string, unknown>) {
         kind: str("kind"),
         status: str("status"),
         tag: str("tag"),
+        category: args.category === "none" ? "none" : Number(args.category) || undefined,
         limit: Math.min(Number(args.limit) || 20, 100),
         offset: Number(args.offset) || 0,
       });
     }
+    case "list_doc_categories":
+      return await listCategories(s);
     case "get_doc":
       return await getDoc(s, args.id);
     case "create_doc":

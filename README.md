@@ -87,12 +87,14 @@ Khi duyệt, app gửi code lên Kaggle bằng kết nối của workspace (`Sav
 
 Người cũng chạy trực tiếp được: nút **Chạy ▶** ở Notebooks (chạy lại code version hiện tại) và **Chạy lại version này** ở trang code của run. Yêu cầu chờ quá 7 ngày hết hạn; tối đa 50 yêu cầu chờ mỗi workspace.
 
-## Tài liệu (ý tưởng, báo cáo, file)
+## Tài liệu (ý tưởng, kết quả, báo cáo, file)
 
 Mục **Tài liệu** là chỗ chung của workspace cho ý tưởng, báo cáo và file. Mỗi tài liệu có loại **Ý tưởng** (trạng thái Mới → Đang thử → Đã chọn / Bỏ), **Báo cáo** hoặc **Khác**, và liên kết được tới paper và run trong cùng workspace. Bấm vào tài liệu để mở ở tab mới.
 
 - **Viết mới:** Markdown hoặc HTML, có xem trước.
 - **Upload:** HTML, PDF, Word, ảnh… tối đa 25 MB. PDF, ảnh, HTML và Word xem được ngay trên web; loại khác tải về. HTML luôn hiển thị trong khung cách ly không chạy script.
+- **Danh mục:** cột bên trái màn Tài liệu; nhóm tự tạo, đổi tên, xóa (tối đa 50). Xóa danh mục thì tài liệu trong đó về "Chưa phân loại".
+- **Kết quả thực nghiệm:** loại **Kết quả** gồm tối đa 10 run và phần kết luận; mở ra là thấy bảng so sánh metric, config khác nhau và biểu đồ, luôn theo số liệu mới nhất. Tạo bằng nút **Lưu thành kết quả** ở màn so sánh run, **Tạo kết quả từ các run** ở trang ý tưởng, hoặc AI gọi `create_doc` với `kind: "result"` và `run_ids`.
 - **AI viết qua MCP:** các tool `list_docs`, `get_doc`, `create_doc`, `update_doc`, `delete_doc` (cùng token cá nhân như các tool paper và run). Script hoặc n8n dùng REST `/api/docs` với `Authorization: Bearer <token>`.
 
 ### Cấu hình kho file (Cloudflare R2)
