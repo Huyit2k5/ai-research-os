@@ -6,6 +6,7 @@ import AuthScreen from "./auth-screen";
 import PapersScreen from "./papers-screen";
 import RunsScreen from "./runs-screen";
 import DocsScreen from "./docs-screen";
+import { followRunning } from "./run-request-shared";
 import { authClient } from "../lib/auth-client";
 import {
   Cpu,
@@ -126,7 +127,8 @@ function Dashboard({ name, userId }: { name: string; userId: string }) {
   const [pendingRuns, setPendingRuns] = useState(0);
   const [runningRuns, setRunningRuns] = useState(0);
   useEffect(() => {
-    const load = () => {
+    const load = async () => {
+      if (!document.hidden) await followRunning();
       fetch(`${API}/api/run-requests?status=running&limit=1`, { cache: "no-store" })
         .then((r) => (r.ok ? r.json() : null))
         .then((b) => {
@@ -135,8 +137,8 @@ function Dashboard({ name, userId }: { name: string; userId: string }) {
         })
         .catch(() => {});
     };
-    load();
-    const t = setInterval(load, 60000);
+    void load();
+    const t = setInterval(() => void load(), 60000);
     return () => clearInterval(t);
   }, [screen]);
   const gpuOf = (id: number) => syncData[id]?.quota?.find((q) => String(q.resource).toUpperCase() === "GPU");
