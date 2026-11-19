@@ -10,7 +10,7 @@ Yêu cầu Docker Desktop và một project Supabase (database PostgreSQL). Nế
 node -e "const fs=require('fs'), c=require('crypto'); fs.writeFileSync('.env', 'CREDENTIAL_ENCRYPTION_KEY='+c.randomBytes(32).toString('base64url')+'=\nDATABASE_URL=\n', {flag:'wx'});"
 ```
 
-Điền `DATABASE_URL` trong `.env`: trên Supabase mở **Connect** → **Session pooler** (hỗ trợ IPv4), copy chuỗi kết nối, thay `[YOUR-PASSWORD]` bằng mật khẩu database và thêm `?sslmode=require&uselibpqcompat=true` vào cuối (xem `.env.example`). Không dùng Direct connection (chỉ IPv6) hoặc Transaction pooler (cổng 6543). Sau đó chạy:
+Điền `DATABASE_URL` trong `.env`: trên Supabase mở **Connect** → **Session pooler** (hỗ trợ IPv4), copy chuỗi kết nối, thay `[YOUR-PASSWORD]` bằng mật khẩu database và thêm `?sslmode=require&uselibpqcompat=true` vào cuối (xem `.env.example`). Không dùng Direct connection (chỉ IPv6). Docker dùng Session pooler (cổng 5432) vì bước migrate cần advisory lock. **Trên Vercel** thì đặt `DATABASE_URL` là **Transaction pooler** (cùng chuỗi, đổi cổng thành `6543`): Session pooler chỉ cho 15 kết nối, mỗi instance serverless giữ tới 10, nên vài instance là hết và mọi API trả 500 (`max clients reached in session mode`). Sau đó chạy:
 
 ```powershell
 docker compose up --build -d

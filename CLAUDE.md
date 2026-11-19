@@ -8,7 +8,7 @@ A local-only Kaggle account manager for small research teams (shared workspaces)
 
 ## Commands
 
-The only supported run setup is Docker Compose from the repo root. The database is a hosted **Supabase** Postgres; there is no local db container. It needs a root `.env` with `CREDENTIAL_ENCRYPTION_KEY` (32 bytes, base64url) and `DATABASE_URL`, which is the Supabase **Session pooler** URL (IPv4, port 5432) ending in `?sslmode=require&uselibpqcompat=true`. The README has a key generator, and `.env.example` shows the URL format.
+The only supported run setup is Docker Compose from the repo root. The database is a hosted **Supabase** Postgres; there is no local db container. It needs a root `.env` with `CREDENTIAL_ENCRYPTION_KEY` (32 bytes, base64url) and `DATABASE_URL`, which is the Supabase **Session pooler** URL (IPv4, port 5432) ending in `?sslmode=require&uselibpqcompat=true`. On Vercel the same URL must use the **Transaction pooler** (port 6543): the session pooler allows 15 clients and each serverless instance's `pg` Pool holds up to 10, so it fills up and every DB route returns 500. The app sets no session state and uses no named prepared statements, so transaction mode is safe; `migrate-auth.mjs` (advisory lock) needs session mode. The README has a key generator, and `.env.example` shows the URL format.
 
 ```powershell
 docker compose up --build -d   # build and start web on http://127.0.0.1:3000
